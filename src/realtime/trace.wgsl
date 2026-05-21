@@ -71,7 +71,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let world_position = resolved.world_position;
     let ray_origin = world_position + world_normal * 0.03;
 
-    var total_unshadowed_light = vec3(0.0);
     var total_shadowed_light = vec3(0.0);
     var total_unshadowed = 0.0;
     var total_shadowed = 0.0;
@@ -87,7 +86,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let unshadowed = diffuse_color * light.color_illuminance.rgb * light.color_illuminance.w * ndotl;
         let visibility = trace_light_visibility(ray_origin, vec4(direction_to_light, 0.0));
         let shadowed = unshadowed * visibility;
-        total_unshadowed_light += unshadowed;
         total_shadowed_light += shadowed;
         total_unshadowed += length(unshadowed);
         total_shadowed += length(shadowed);
@@ -113,7 +111,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let unshadowed = diffuse_color * luminous_intensity * attenuation * ndotl * cone_factor;
         let visibility = trace_point_visibility(ray_origin, light.position_range.xyz);
         let shadowed = unshadowed * visibility;
-        total_unshadowed_light += unshadowed;
         total_shadowed_light += shadowed;
         total_unshadowed += length(unshadowed);
         total_shadowed += length(shadowed);
@@ -125,6 +122,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let shadow_mask = 1.0 - saturate(total_shadowed / total_unshadowed);
-    let replacement = max(total_shadowed_light - total_unshadowed_light, vec3(-65504.0));
-    textureStore(output_texture, pixel, vec4(replacement, shadow_mask));
+    textureStore(output_texture, pixel, vec4(total_shadowed_light, shadow_mask));
 }

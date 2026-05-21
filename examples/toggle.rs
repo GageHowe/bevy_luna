@@ -82,7 +82,6 @@ fn toggle_shadow_mode(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<ShadowRe
 fn apply_shadow_mode(
     mode: Res<ShadowRenderMode>,
     mut settings: ResMut<RaytraceSettings>,
-    mut directional_lights: Query<&mut DirectionalLight>,
 ) {
     let raytraced = *mode == ShadowRenderMode::Raytraced;
     settings.mode = if raytraced {
@@ -90,7 +89,4 @@ fn apply_shadow_mode(
     } else {
         RaytraceMode::Bevy
     };
-    for mut light in &mut directional_lights {
-        light.shadows_enabled = !raytraced;
-    }
 }

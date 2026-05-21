@@ -174,8 +174,13 @@ impl Plugin for RaytraceViewPlugin {
                 PostUpdate,
                 (
                     sync_managed_views,
-                    sync_relevant_lights
+                    restore_supported_lights_for_clustering
                         .after(sync_managed_views)
+                        .before(SimulationLightSystems::AssignLightsToClusters),
+                    apply_supported_light_render_mode
+                        .after(SimulationLightSystems::AssignLightsToClusters),
+                    sync_relevant_lights
+                        .after(apply_supported_light_render_mode)
                         .after(SimulationLightSystems::AssignLightsToClusters),
                     validate_raytrace_views,
                 ),
@@ -249,6 +254,65 @@ fn validate_raytrace_views(raytrace_views: Query<(Entity, &Msaa), With<RaytraceV
         if *msaa != Msaa::Off {
             warn!("RaytraceView on entity {entity} requires Msaa::Off");
         }
+    }
+}
+
+fn restore_supported_lights_for_clustering(
+    settings: Res<RaytraceSettings>,
+    mut directional_lights: Query<(&mut DirectionalLight, &RaytraceDirectionalLight)>,
+    mut point_lights: Query<(&mut PointLight, &RaytracePunctualLight), Without<SpotLight>>,
+    mut spot_lights: Query<(&mut SpotLight, &RaytracePunctualLight), Without<PointLight>>,
+) {
+    if settings.mode != RaytraceMode::RaytracedShadows {
+        return;
+    }
+
+    for (mut light, override_light) in &mut directional_lights {
+        light.illuminance = override_light.illuminance;
+    }
+
+    for (mut light, override_light) in &mut point_lights {
+        light.intensity = override_light.intensity;
+    }
+
+    for (mut light, override_light) in &mut spot_lights {
+        light.intensity = override_light.intensity;
+    }
+}
+
+fn apply_supported_light_render_mode(
+    settings: Res<RaytraceSettings>,
+    mut directional_lights: Query<(&mut DirectionalLight, &RaytraceDirectionalLight)>,
+    mut point_lights: Query<(&mut PointLight, &RaytracePunctualLight), Without<SpotLight>>,
+    mut spot_lights: Query<(&mut SpotLight, &RaytracePunctualLight), Without<PointLight>>,
+) {
+    let raytraced = settings.mode == RaytraceMode::RaytracedShadows;
+
+    for (mut light, override_light) in &mut directional_lights {
+        light.illuminance = if raytraced {
+            0.0
+        } else {
+            override_light.illuminance
+        };
+        light.shadows_enabled = !raytraced;
+    }
+
+    for (mut light, override_light) in &mut point_lights {
+        light.intensity = if raytraced {
+            0.0
+        } else {
+            override_light.intensity
+        };
+        light.shadows_enabled = !raytraced;
+    }
+
+    for (mut light, override_light) in &mut spot_lights {
+        light.intensity = if raytraced {
+            0.0
+        } else {
+            override_light.intensity
+        };
+        light.shadows_enabled = !raytraced;
     }
 }
 

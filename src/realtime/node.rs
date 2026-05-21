@@ -23,7 +23,7 @@ use bevy::{
             BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
             CachedComputePipelineId, CachedRenderPipelineId, ColorTargetState, ColorWrites,
             ComputePassDescriptor, ComputePipelineDescriptor, FragmentState, Operations,
-            PipelineCache, RenderPassColorAttachment, RenderPassDescriptor,
+            CachedPipelineState, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor,
             RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor,
             ShaderStages, StorageTextureAccess, TextureFormat, TextureSampleType,
             binding_types::{sampler, texture_2d, texture_depth_2d, texture_storage_2d, uniform_buffer},
@@ -217,10 +217,11 @@ impl ViewNode for RaytraceNode {
 
         let Some(compute_pipeline) = pipeline_cache.get_compute_pipeline(pipelines.compute_pipeline)
         else {
-            bevy::log::warn!(
-                "bevy_raytrace: compute pipeline not ready: {:?}",
+            if let CachedPipelineState::Err(err) =
                 pipeline_cache.get_compute_pipeline_state(pipelines.compute_pipeline)
-            );
+            {
+                bevy::log::warn!("bevy_raytrace: compute pipeline failed: {err:?}");
+            }
             return Ok(());
         };
         let composite_pipeline_id = match raytrace_view.debug {
@@ -230,10 +231,11 @@ impl ViewNode for RaytraceNode {
         };
         let Some(composite_pipeline) = pipeline_cache.get_render_pipeline(composite_pipeline_id)
         else {
-            bevy::log::warn!(
-                "bevy_raytrace: composite pipeline not ready: {:?}",
+            if let CachedPipelineState::Err(err) =
                 pipeline_cache.get_render_pipeline_state(composite_pipeline_id)
-            );
+            {
+                bevy::log::warn!("bevy_raytrace: composite pipeline failed: {err:?}");
+            }
             return Ok(());
         };
         let Some(scene_bind_group) = scene_bindings.bind_group.as_ref() else {
