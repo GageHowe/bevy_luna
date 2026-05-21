@@ -96,7 +96,7 @@ fn setup(
             range: 16.0,
             inner_angle: 0.24,
             outer_angle: 0.42,
-            shadows_enabled: false,
+            shadows_enabled: true,
             ..default()
         },
         Transform::from_xyz(-3.8, 4.8, 2.4).looking_at(Vec3::new(-1.2, 1.0, 0.4), Vec3::Y),
@@ -158,6 +158,7 @@ fn apply_shadow_mode(
     mode: Res<ShadowRenderMode>,
     mut settings: ResMut<RaytraceSettings>,
     mut point_lights: Query<&mut PointLight, Without<SpotLight>>,
+    mut spot_lights: Query<&mut SpotLight, Without<PointLight>>,
 ) {
     let raytraced = *mode == ShadowRenderMode::Raytraced;
     settings.mode = if raytraced {
@@ -166,6 +167,9 @@ fn apply_shadow_mode(
         RaytraceMode::Bevy
     };
     for mut light in &mut point_lights {
+        light.shadows_enabled = !raytraced;
+    }
+    for mut light in &mut spot_lights {
         light.shadows_enabled = !raytraced;
     }
 }

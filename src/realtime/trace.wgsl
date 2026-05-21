@@ -4,14 +4,16 @@
 #import bevy_solari::scene_bindings::{DirectionalLight, directional_lights}
 #import bevy_solari::sampling::{trace_light_visibility, trace_point_visibility}
 
-struct GpuPointLight {
+struct GpuPunctualLight {
     position_range: vec4<f32>,
     color_intensity: vec4<f32>,
+    direction_cos_outer: vec4<f32>,
+    params: vec4<f32>,
 }
 
 struct RaytraceLights {
-    point_lights: array<GpuPointLight, 16u>,
-    point_light_count: u32,
+    punctual_lights: array<GpuPunctualLight, 16u>,
+    punctual_light_count: u32,
     _padding: vec4<f32>,
 }
 
@@ -34,6 +36,16 @@ fn inverse_square_range_attenuation(distance_sq: f32, range: f32) -> f32 {
     let factor = distance_sq * inverse_range_sq;
     let smooth_factor = saturate(1.0 - factor * factor);
     return (smooth_factor * smooth_factor) / max(distance_sq, 0.0001);
+}
+
+fn punctual_cone_attenuation(light: GpuPunctualLight, wi: vec3<f32>) -> f32 {
+    if light.params.z < 0.5 {
+        return 1.0;
+    }
+
+    let cd = dot(-light.direction_cos_outer.xyz, wi);
+    let spot_attenuation = saturate(cd * light.params.x + light.params.y);
+    return spot_attenuation * spot_attenuation;
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -76,8 +88,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         total_occluded += length(occluded);
     }
 
-    for (var i = 0u; i < lights.point_light_count; i += 1u) {
-        let light = lights.point_lights[i];
+    for (var i = 0u; i < lights.punctual_light_count; i += 1u) {
+        let light = lights.punctual_lights[i];
         let to_light = light.position_range.xyz - world_position;
         let distance_sq = dot(to_light, to_light);
         let distance = sqrt(max(distance_sq, 0.0001));
@@ -88,8 +100,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         let attenuation = inverse_square_range_attenuation(distance_sq, light.position_range.w);
+        let cone_factor = punctual_cone_attenuation(light, wi);
+        if cone_factor <= 0.0 {
+            continue;
+        }
         let luminous_intensity = light.color_intensity.rgb * (light.color_intensity.w / (4.0 * PI));
-        let unshadowed = base_color * luminous_intensity * attenuation * ndotl;
+        let unshadowed = base_color * luminous_intensity * attenuation * ndotl * cone_factor;
         let visibility = trace_point_visibility(ray_origin, light.position_range.xyz);
         let occluded = unshadowed * (1.0 - visibility);
         total_occlusion += occluded;

@@ -19,26 +19,28 @@ use bevy::{
 };
 use bevy::render::renderer::RenderQueue;
 
-pub const MAX_POINT_LIGHTS: usize = 16;
+pub const MAX_PUNCTUAL_LIGHTS: usize = 16;
 
 #[derive(Clone, Copy, Debug, ShaderType, Default)]
-pub struct GpuPointLight {
+pub struct GpuPunctualLight {
     pub position_range: Vec4,
     pub color_intensity: Vec4,
+    pub direction_cos_outer: Vec4,
+    pub params: Vec4,
 }
 
 #[derive(Clone, Copy, ShaderType)]
 pub struct RaytraceLightsUniform {
-    pub point_lights: [GpuPointLight; MAX_POINT_LIGHTS],
-    pub point_light_count: u32,
+    pub punctual_lights: [GpuPunctualLight; MAX_PUNCTUAL_LIGHTS],
+    pub punctual_light_count: u32,
     pub _padding: Vec4,
 }
 
 impl Default for RaytraceLightsUniform {
     fn default() -> Self {
         Self {
-            point_lights: [GpuPointLight::default(); MAX_POINT_LIGHTS],
-            point_light_count: 0,
+            punctual_lights: [GpuPunctualLight::default(); MAX_PUNCTUAL_LIGHTS],
+            punctual_light_count: 0,
             _padding: Vec4::ZERO,
         }
     }
@@ -117,8 +119,8 @@ pub fn prepare_raytrace_view_lights(
         let selection = selection.cloned().unwrap_or_default();
         let mut uniform = UniformBuffer::default();
         uniform.set(RaytraceLightsUniform {
-            point_lights: selection.point_lights,
-            point_light_count: selection.point_light_count,
+            punctual_lights: selection.punctual_lights,
+            punctual_light_count: selection.punctual_light_count,
             _padding: Vec4::ZERO,
         });
         uniform.write_buffer(&render_device, &render_queue);

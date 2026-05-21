@@ -5,7 +5,7 @@ mod scene;
 
 pub use realtime::{
     RaytraceCapabilities, RaytraceDebugMode, RaytraceManagedView, RaytraceMode, RaytraceQuality,
-    RaytraceSettings, RaytraceView, RaytraceViewPlugin, RenderRaytraceDiagnostics,
+    RaytraceSettings, RaytraceView, RaytraceViewPlugin,
 };
 pub use scene::{DisableRaytracingMesh, RaytraceScenePlugin, RaytracingMesh3d};
 
@@ -18,7 +18,7 @@ pub mod prelude {
     pub use crate::{
         DisableRaytracingMesh, RaytraceDebugMode, RaytraceManagedView, RaytracePlugins,
         RaytraceCapabilities, RaytraceMode, RaytraceQuality, RaytraceScenePlugin, RaytraceSettings,
-        RaytraceView, RaytraceViewPlugin, RaytracingMesh3d, RenderRaytraceDiagnostics,
+        RaytraceView, RaytraceViewPlugin, RaytracingMesh3d,
     };
 }
 
