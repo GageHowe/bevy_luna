@@ -4,8 +4,9 @@ mod realtime;
 mod scene;
 
 pub use realtime::{
-    RaytraceCapabilities, RaytraceDebugMode, RaytraceManagedView, RaytraceMode, RaytraceQuality,
-    RaytraceSettings, RaytraceView, RaytraceViewPlugin,
+    RaytraceCapabilities, RaytraceDebugMode, RaytraceDirectionalLight, RaytraceManagedView,
+    RaytraceMode, RaytracePunctualLight, RaytraceQuality, RaytraceSettings, RaytraceView,
+    RaytraceViewPlugin,
 };
 pub use scene::{DisableRaytracingMesh, RaytraceScenePlugin, RaytracingMesh3d};
 
@@ -16,9 +17,10 @@ use bevy_solari::SolariPlugins;
 /// Prelude exports for users of `bevy_raytrace`.
 pub mod prelude {
     pub use crate::{
-        DisableRaytracingMesh, RaytraceDebugMode, RaytraceManagedView, RaytracePlugins,
-        RaytraceCapabilities, RaytraceMode, RaytraceQuality, RaytraceScenePlugin, RaytraceSettings,
-        RaytraceView, RaytraceViewPlugin, RaytracingMesh3d,
+        DisableRaytracingMesh, RaytraceDebugMode, RaytraceDirectionalLight, RaytraceManagedView,
+        RaytracePlugins, RaytraceCapabilities, RaytraceMode, RaytracePunctualLight,
+        RaytraceQuality, RaytraceScenePlugin, RaytraceSettings, RaytraceView,
+        RaytraceViewPlugin, RaytracingMesh3d,
     };
 }
 

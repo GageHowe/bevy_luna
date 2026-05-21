@@ -7,7 +7,7 @@ use bevy::{
     camera::Camera3d,
     core_pipeline::prepass::{DeferredPrepass, DepthPrepass, NormalPrepass},
     ecs::{component::Component, prelude::ReflectComponent},
-    light::{cluster::VisibleClusterableObjects, PointLight, SimulationLightSystems, SpotLight},
+    light::{cluster::VisibleClusterableObjects, DirectionalLight, PointLight, SimulationLightSystems, SpotLight},
     pbr::DefaultOpaqueRendererMethod,
     prelude::*,
     reflect::{Reflect, std_traits::ReflectDefault},
@@ -22,7 +22,8 @@ use bevy::{
 };
 use node::{load_internal_assets, setup_render_app};
 use prepare::{
-    GpuPunctualLight, MAX_PUNCTUAL_LIGHTS, prepare_raytrace_output_textures,
+    GpuDirectionalLight, GpuPunctualLight, MAX_DIRECTIONAL_LIGHTS, MAX_PUNCTUAL_LIGHTS,
+    prepare_raytrace_output_textures,
     prepare_raytrace_view_lights,
 };
 
@@ -88,6 +89,28 @@ pub enum RaytraceDebugMode {
 #[require(Camera3d)]
 pub struct RaytraceManagedView;
 
+/// Explicit directional light data for the raytraced path.
+///
+/// Attach this when you want the raytracer to preserve a directional light's
+/// source intensity even if the runtime mode temporarily zeros the Bevy light.
+#[derive(Component, Clone, Copy, Debug, Default, Reflect, PartialEq)]
+#[reflect(Component, Default, PartialEq)]
+pub struct RaytraceDirectionalLight {
+    /// Illuminance in lux used by the raytraced path.
+    pub illuminance: f32,
+}
+
+/// Explicit point/spot light data for the raytraced path.
+///
+/// Attach this when you want the raytracer to preserve a punctual light's
+/// source intensity even if the runtime mode temporarily zeros the Bevy light.
+#[derive(Component, Clone, Copy, Debug, Default, Reflect, PartialEq)]
+#[reflect(Component, Default, PartialEq)]
+pub struct RaytracePunctualLight {
+    /// Luminous power/intensity scalar used by the raytraced path.
+    pub intensity: f32,
+}
+
 /// Per-camera raytracing configuration.
 #[derive(Component, Clone, Debug, Reflect, ExtractComponent)]
 #[reflect(Component, Default, Clone)]
@@ -110,6 +133,8 @@ impl Default for RaytraceView {
 
 #[derive(Component, Clone, Debug, Default, ExtractComponent)]
 pub struct RaytraceLightSelection {
+    pub directional_lights: [GpuDirectionalLight; MAX_DIRECTIONAL_LIGHTS],
+    pub directional_light_count: u32,
     pub punctual_lights: [GpuPunctualLight; MAX_PUNCTUAL_LIGHTS],
     pub punctual_light_count: u32,
 }
@@ -135,6 +160,8 @@ impl Plugin for RaytraceViewPlugin {
             .register_type::<RaytraceDebugMode>()
             .register_type::<RaytraceCapabilities>()
             .register_type::<RaytraceManagedView>()
+            .register_type::<RaytraceDirectionalLight>()
+            .register_type::<RaytracePunctualLight>()
             .register_type::<RaytraceView>()
             .init_resource::<RaytraceSettings>()
             .init_resource::<RaytraceCapabilities>()
@@ -236,8 +263,9 @@ fn sync_relevant_lights(
         ),
         With<RaytraceManagedView>,
     >,
-    point_lights: Query<(&PointLight, &GlobalTransform)>,
-    spot_lights: Query<(&SpotLight, &GlobalTransform)>,
+    directional_lights: Query<(&DirectionalLight, &GlobalTransform, Option<&RaytraceDirectionalLight>)>,
+    point_lights: Query<(&PointLight, &GlobalTransform, Option<&RaytracePunctualLight>)>,
+    spot_lights: Query<(&SpotLight, &GlobalTransform, Option<&RaytracePunctualLight>)>,
 ) {
     for (entity, raytrace_view, visible_lights, camera_transform) in &managed_views {
         if raytrace_view.is_none() {
@@ -246,16 +274,42 @@ fn sync_relevant_lights(
         }
 
         let camera_position = camera_transform.translation();
+        let mut selection = RaytraceLightSelection::default();
+
+        for (light, transform, override_light) in &directional_lights {
+            let illuminance = override_light.map_or(light.illuminance, |value| value.illuminance);
+            if illuminance <= 0.0 {
+                continue;
+            }
+            if (selection.directional_light_count as usize) >= MAX_DIRECTIONAL_LIGHTS {
+                break;
+            }
+
+            let direction_to_light = -transform.forward().as_vec3();
+            selection.directional_lights[selection.directional_light_count as usize] =
+                GpuDirectionalLight {
+                    direction_to_light: direction_to_light.extend(0.0),
+                    color_illuminance: light
+                        .color
+                        .to_linear()
+                        .to_vec3()
+                        .extend(illuminance),
+                };
+            selection.directional_light_count += 1;
+        }
+
         let mut scored = visible_lights
             .map(|visible_lights| {
                 visible_lights
                     .entities
                     .iter()
                     .filter_map(|light_entity| {
-                        if let Ok((light, transform)) = point_lights.get(*light_entity) {
+                        if let Ok((light, transform, override_light)) = point_lights.get(*light_entity) {
+                            let intensity =
+                                override_light.map_or(light.intensity, |value| value.intensity);
                             let distance_sq =
                                 camera_position.distance_squared(transform.translation()).max(1.0);
-                            let score = (light.intensity * light.range * light.range) / distance_sq;
+                            let score = (intensity * light.range * light.range) / distance_sq;
                             return Some((
                                 score,
                                 GpuPunctualLight {
@@ -264,17 +318,19 @@ fn sync_relevant_lights(
                                         .color
                                         .to_linear()
                                         .to_vec3()
-                                        .extend(light.intensity),
+                                        .extend(intensity),
                                     direction_cos_outer: Vec4::ZERO,
                                     params: Vec4::ZERO,
                                 },
                             ));
                         }
 
-                        let (light, transform) = spot_lights.get(*light_entity).ok()?;
+                        let (light, transform, override_light) = spot_lights.get(*light_entity).ok()?;
+                        let intensity =
+                            override_light.map_or(light.intensity, |value| value.intensity);
                         let distance_sq =
                             camera_position.distance_squared(transform.translation()).max(1.0);
-                        let score = (light.intensity * light.range * light.range) / distance_sq;
+                        let score = (intensity * light.range * light.range) / distance_sq;
                         let direction = transform.forward().as_vec3();
                         let cos_inner = light.inner_angle.cos();
                         let cos_outer = light.outer_angle.cos();
@@ -287,7 +343,7 @@ fn sync_relevant_lights(
                                     .color
                                     .to_linear()
                                     .to_vec3()
-                                    .extend(light.intensity),
+                                    .extend(intensity),
                                 direction_cos_outer: direction.extend(cos_outer),
                                 params: Vec4::new(inverse_angle_range, -cos_outer * inverse_angle_range, 1.0, 0.0),
                             },
@@ -299,7 +355,6 @@ fn sync_relevant_lights(
 
         scored.sort_by(|a, b| b.0.total_cmp(&a.0));
 
-        let mut selection = RaytraceLightSelection::default();
         for (_, light) in scored {
             if (selection.punctual_light_count as usize) < MAX_PUNCTUAL_LIGHTS {
                 selection.punctual_lights[selection.punctual_light_count as usize] = light;

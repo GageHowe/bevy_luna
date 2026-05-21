@@ -47,6 +47,9 @@ fn setup(
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -1.0, -0.7, 0.0)),
+        RaytraceDirectionalLight {
+            illuminance: 28_000.0,
+        },
     ));
 
     commands.spawn((

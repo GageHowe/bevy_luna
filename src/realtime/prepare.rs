@@ -19,7 +19,14 @@ use bevy::{
 };
 use bevy::render::renderer::RenderQueue;
 
+pub const MAX_DIRECTIONAL_LIGHTS: usize = 4;
 pub const MAX_PUNCTUAL_LIGHTS: usize = 16;
+
+#[derive(Clone, Copy, Debug, ShaderType, Default)]
+pub struct GpuDirectionalLight {
+    pub direction_to_light: Vec4,
+    pub color_illuminance: Vec4,
+}
 
 #[derive(Clone, Copy, Debug, ShaderType, Default)]
 pub struct GpuPunctualLight {
@@ -31,6 +38,9 @@ pub struct GpuPunctualLight {
 
 #[derive(Clone, Copy, ShaderType)]
 pub struct RaytraceLightsUniform {
+    pub directional_lights: [GpuDirectionalLight; MAX_DIRECTIONAL_LIGHTS],
+    pub directional_light_count: u32,
+    pub _directional_padding: Vec4,
     pub punctual_lights: [GpuPunctualLight; MAX_PUNCTUAL_LIGHTS],
     pub punctual_light_count: u32,
     pub _padding: Vec4,
@@ -39,6 +49,9 @@ pub struct RaytraceLightsUniform {
 impl Default for RaytraceLightsUniform {
     fn default() -> Self {
         Self {
+            directional_lights: [GpuDirectionalLight::default(); MAX_DIRECTIONAL_LIGHTS],
+            directional_light_count: 0,
+            _directional_padding: Vec4::ZERO,
             punctual_lights: [GpuPunctualLight::default(); MAX_PUNCTUAL_LIGHTS],
             punctual_light_count: 0,
             _padding: Vec4::ZERO,
@@ -119,6 +132,9 @@ pub fn prepare_raytrace_view_lights(
         let selection = selection.cloned().unwrap_or_default();
         let mut uniform = UniformBuffer::default();
         uniform.set(RaytraceLightsUniform {
+            directional_lights: selection.directional_lights,
+            directional_light_count: selection.directional_light_count,
+            _directional_padding: Vec4::ZERO,
             punctual_lights: selection.punctual_lights,
             punctual_light_count: selection.punctual_light_count,
             _padding: Vec4::ZERO,

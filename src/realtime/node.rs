@@ -57,6 +57,7 @@ pub struct RaytracePipelines {
 pub struct RaytraceNode;
 
 pub fn load_internal_assets(app: &mut bevy::app::App) {
+    load_shader_library!(app, "gbuffer_utils.wgsl");
     load_shader_library!(app, "trace.wgsl");
     embedded_asset!(app, "composite.wgsl");
     embedded_asset!(app, "composite_debug.wgsl");
