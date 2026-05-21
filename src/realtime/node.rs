@@ -239,7 +239,7 @@ impl ViewNode for RaytraceNode {
             return Ok(());
         };
         let Some(scene_bind_group) = scene_bindings.bind_group.as_ref() else {
-            bevy::log::warn!("bevy_luna: missing scene bind group");
+            bevy::log::debug!("bevy_luna: missing scene bind group");
             return Ok(());
         };
         let Some(deferred_view) = prepass_textures.deferred_view() else {
