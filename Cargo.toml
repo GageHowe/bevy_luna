@@ -1,5 +1,5 @@
 [package]
-name = "bevy_luna"
+name = "bevy_raytrace"
 version = "0.1.0"
 edition = "2024"
 
@@ -18,3 +18,4 @@ unsafe_op_in_unsafe_fn = "warn"
 [dependencies]
 bevy = { version = "0.18", default-features = false, features = ["3d"] }
 bevy_solari = { version = "0.18.1" }
+bevy_shader = { version = "0.18" }

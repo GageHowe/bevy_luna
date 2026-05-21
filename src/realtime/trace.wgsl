@@ -1,69 +1,107 @@
+#import bevy_render::maths::PI
 #import bevy_render::view::View
-#import bevy_solari::scene_bindings::{directional_lights, trace_ray, RAY_T_MAX}
+#import bevy_pbr::pbr_deferred_types::unpack_unorm4x8_
+#import bevy_solari::scene_bindings::{DirectionalLight, directional_lights}
+#import bevy_solari::sampling::{trace_light_visibility, trace_point_visibility}
+
+struct GpuPointLight {
+    position_range: vec4<f32>,
+    color_intensity: vec4<f32>,
+}
+
+struct RaytraceLights {
+    point_lights: array<GpuPointLight, 16u>,
+    point_light_count: u32,
+    _padding: vec4<f32>,
+}
 
 @group(1) @binding(0) var output_texture: texture_storage_2d<rgba16float, write>;
-@group(1) @binding(1) var depth_texture: texture_depth_2d;
-@group(1) @binding(2) var normal_texture: texture_2d<f32>;
-@group(1) @binding(3) var<uniform> view: View;
+@group(1) @binding(1) var deferred_texture: texture_2d<u32>;
+@group(1) @binding(2) var depth_texture: texture_depth_2d;
+@group(1) @binding(3) var normal_texture: texture_2d<f32>;
+@group(1) @binding(4) var<uniform> view: View;
+@group(1) @binding(5) var<uniform> lights: RaytraceLights;
 
-fn reconstruct_view_position(pixel: vec2<i32>, dims: vec2<u32>, depth: f32) -> vec3<f32> {
-    let uv = (vec2<f32>(pixel) + vec2(0.5, 0.5)) / vec2<f32>(dims);
-    let clip_xy = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - 2.0 * uv.y);
-    let view_position_h = view.view_from_clip * vec4<f32>(clip_xy, depth, 1.0);
-    return view_position_h.xyz / view_position_h.w;
+fn reconstruct_world_position(pixel_id: vec2<u32>, depth: f32, view_size: vec2<f32>) -> vec3<f32> {
+    let uv = (vec2<f32>(pixel_id) + 0.5) / view_size;
+    let xy_ndc = (uv - vec2(0.5)) * vec2(2.0, -2.0);
+    let world_pos = view.world_from_clip * vec4(xy_ndc, depth, 1.0);
+    return world_pos.xyz / world_pos.w;
 }
 
-fn reconstruct_world_position(pixel: vec2<i32>, dims: vec2<u32>, depth: f32) -> vec3<f32> {
-    let view_position = reconstruct_view_position(pixel, dims, depth);
-    return (view.world_from_view * vec4<f32>(view_position, 1.0)).xyz;
-}
-
-fn decode_normal(encoded: vec3<f32>) -> vec3<f32> {
-    return normalize(encoded * 2.0 - vec3<f32>(1.0));
-}
-
-fn is_valid_depth(depth: f32) -> bool {
-    return depth > 0.0 && depth < 1.0;
+fn inverse_square_range_attenuation(distance_sq: f32, range: f32) -> f32 {
+    let inverse_range_sq = 1.0 / max(range * range, 0.0001);
+    let factor = distance_sq * inverse_range_sq;
+    let smooth_factor = saturate(1.0 - factor * factor);
+    return (smooth_factor * smooth_factor) / max(distance_sq, 0.0001);
 }
 
 @compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dims = textureDimensions(output_texture);
-    if global_id.x >= dims.x || global_id.y >= dims.y {
+    if any(gid.xy >= dims) {
         return;
     }
 
-    let pixel = vec2<i32>(global_id.xy);
+    let pixel = vec2<i32>(gid.xy);
     let depth = textureLoad(depth_texture, pixel, 0);
-    if !is_valid_depth(depth) {
-        textureStore(output_texture, pixel, vec4(1.0, 1.0, 1.0, 0.0));
+    if depth <= 0.0 {
+        textureStore(output_texture, pixel, vec4(0.0));
         return;
     }
 
-    let encoded_normal = textureLoad(normal_texture, pixel, 0).xyz;
-    let normal = decode_normal(encoded_normal);
-    if any(normal != normal) {
-        textureStore(output_texture, pixel, vec4(1.0, 1.0, 1.0, 0.0));
+    let gbuffer = textureLoad(deferred_texture, pixel, 0);
+    let base_rough = unpack_unorm4x8_(gbuffer.r);
+    let base_color = pow(base_rough.rgb, vec3(2.2)) / PI;
+    let world_normal = normalize(textureLoad(normal_texture, pixel, 0).xyz * 2.0 - vec3(1.0));
+    let world_position = reconstruct_world_position(gid.xy, depth, vec2<f32>(dims));
+    let ray_origin = world_position + world_normal * 0.03;
+
+    var total_occlusion = vec3(0.0);
+    var total_unshadowed = 0.0;
+    var total_occluded = 0.0;
+
+    for (var i = 0u; i < arrayLength(&directional_lights); i += 1u) {
+        let light: DirectionalLight = directional_lights[i];
+        let ndotl = saturate(dot(world_normal, light.direction_to_light));
+        if ndotl <= 0.0 {
+            continue;
+        }
+
+        let unshadowed = base_color * light.luminance * ndotl;
+        let visibility = trace_light_visibility(ray_origin, vec4(light.direction_to_light, 0.0));
+        let occluded = unshadowed * (1.0 - visibility);
+        total_occlusion += occluded;
+        total_unshadowed += length(unshadowed);
+        total_occluded += length(occluded);
+    }
+
+    for (var i = 0u; i < lights.point_light_count; i += 1u) {
+        let light = lights.point_lights[i];
+        let to_light = light.position_range.xyz - world_position;
+        let distance_sq = dot(to_light, to_light);
+        let distance = sqrt(max(distance_sq, 0.0001));
+        let wi = to_light / distance;
+        let ndotl = saturate(dot(world_normal, wi));
+        if ndotl <= 0.0 || distance >= light.position_range.w {
+            continue;
+        }
+
+        let attenuation = inverse_square_range_attenuation(distance_sq, light.position_range.w);
+        let luminous_intensity = light.color_intensity.rgb * (light.color_intensity.w / (4.0 * PI));
+        let unshadowed = base_color * luminous_intensity * attenuation * ndotl;
+        let visibility = trace_point_visibility(ray_origin, light.position_range.xyz);
+        let occluded = unshadowed * (1.0 - visibility);
+        total_occlusion += occluded;
+        total_unshadowed += length(unshadowed);
+        total_occluded += length(occluded);
+    }
+
+    if total_unshadowed <= 0.0 {
+        textureStore(output_texture, pixel, vec4(0.0));
         return;
     }
 
-    let directional_light_count = arrayLength(&directional_lights);
-    if directional_light_count == 0u {
-        textureStore(output_texture, pixel, vec4(1.0, 1.0, 1.0, 0.0));
-        return;
-    }
-
-    let world_position = reconstruct_world_position(pixel, dims, depth);
-    let light = directional_lights[0u];
-    let direction_to_light = normalize(light.direction_to_light);
-    let ndotl = max(dot(normal, direction_to_light), 0.0);
-    if ndotl <= 0.0 {
-        textureStore(output_texture, pixel, vec4(1.0, 1.0, 1.0, 0.0));
-        return;
-    }
-
-    let ray_origin = world_position + normal * 0.02;
-    let ray_hit = trace_ray(ray_origin, direction_to_light, 0.001, RAY_T_MAX, RAY_FLAG_TERMINATE_ON_FIRST_HIT);
-    let visible = f32(ray_hit.kind == RAY_QUERY_INTERSECTION_NONE);
-    textureStore(output_texture, pixel, vec4(vec3<f32>(visible), ndotl));
+    let shadow_mask = saturate(total_occluded / total_unshadowed);
+    textureStore(output_texture, pixel, vec4(total_occlusion, shadow_mask));
 }

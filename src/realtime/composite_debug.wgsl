@@ -7,6 +7,5 @@
 @fragment
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let traced = textureSample(raytrace_texture, linear_sampler, in.uv);
-    let light_factor = clamp(traced.rgb, vec3(0.0), vec3(1.6));
-    return vec4(light_factor / 1.6, 1.0);
+    return vec4(max(traced.rgb, vec3(0.0)), 1.0);
 }

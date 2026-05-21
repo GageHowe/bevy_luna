@@ -5,16 +5,21 @@ use bevy::{
 };
 use bevy_raytrace::prelude::*;
 
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum ShadowRenderMode {
+    #[default]
+    Bevy,
+    Raytraced,
+}
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(RaytracePlugins)
-        .insert_resource(RaytraceSettings {
-            enabled: true,
-            ..default()
-        })
+        .init_resource::<ShadowRenderMode>()
         .add_systems(Startup, setup)
-        .add_systems(Update, (toggle_raytracing, toggle_debug_view))
+        .add_systems(Update, (toggle_shadow_mode, apply_shadow_mode).chain())
+        .add_systems(Update, toggle_debug_view)
         .run();
 }
 
@@ -23,6 +28,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    commands.insert_resource(RaytraceSettings::default());
     commands.insert_resource(GlobalAmbientLight {
         brightness: 18.0,
         ..default()
@@ -43,7 +49,7 @@ fn setup(
         DirectionalLight {
             illuminance: 35_000.0,
             color: Color::srgb(1.0, 0.96, 0.90),
-            shadows_enabled: false,
+            shadows_enabled: true,
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.72, -0.92, 0.0)),
@@ -71,10 +77,29 @@ fn setup(
     ));
 }
 
-fn toggle_raytracing(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<RaytraceSettings>) {
+fn toggle_shadow_mode(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<ShadowRenderMode>) {
     if keys.just_pressed(KeyCode::KeyR) {
-        settings.enabled = !settings.enabled;
-        info!("raytracing enabled: {}", settings.enabled);
+        *mode = match *mode {
+            ShadowRenderMode::Bevy => ShadowRenderMode::Raytraced,
+            ShadowRenderMode::Raytraced => ShadowRenderMode::Bevy,
+        };
+        info!("shadow mode: {:?}", *mode);
+    }
+}
+
+fn apply_shadow_mode(
+    mode: Res<ShadowRenderMode>,
+    mut settings: ResMut<RaytraceSettings>,
+    mut directional_lights: Query<&mut DirectionalLight>,
+) {
+    let raytraced = *mode == ShadowRenderMode::Raytraced;
+    settings.mode = if raytraced {
+        RaytraceMode::RaytracedShadows
+    } else {
+        RaytraceMode::Bevy
+    };
+    for mut light in &mut directional_lights {
+        light.shadows_enabled = !raytraced;
     }
 }
 

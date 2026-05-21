@@ -7,6 +7,6 @@
 @fragment
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let traced = textureSample(raytrace_texture, linear_sampler, in.uv);
-    let mask = clamp(traced.r, 0.0, 1.0);
+    let mask = clamp(traced.a, 0.0, 1.0);
     return vec4(vec3(mask), 1.0);
 }

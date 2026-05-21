@@ -1,4 +1,4 @@
-use super::prepare::RaytraceOutputTexture;
+use super::prepare::{RaytraceLightsUniform, RaytraceOutputTexture, RaytraceViewLights};
 use super::{RaytraceDebugMode, RaytraceQuality, RaytraceView};
 use bevy::{
     app::SubApp,
@@ -32,6 +32,7 @@ use bevy::{
         view::{ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms},
     },
 };
+use bevy_shader::load_shader_library;
 use bevy_solari::scene::RaytracingSceneBindings;
 
 pub mod graph {
@@ -56,7 +57,7 @@ pub struct RaytracePipelines {
 pub struct RaytraceNode;
 
 pub fn load_internal_assets(app: &mut bevy::app::App) {
-    embedded_asset!(app, "trace.wgsl");
+    load_shader_library!(app, "trace.wgsl");
     embedded_asset!(app, "composite.wgsl");
     embedded_asset!(app, "composite_debug.wgsl");
     embedded_asset!(app, "composite_shadow_mask.wgsl");
@@ -89,9 +90,11 @@ fn init_raytrace_pipelines(
             ShaderStages::COMPUTE,
             (
                 texture_storage_2d(TextureFormat::Rgba16Float, StorageTextureAccess::WriteOnly),
+                texture_2d(TextureSampleType::Uint),
                 texture_depth_2d(),
                 texture_2d(TextureSampleType::Float { filterable: false }),
                 uniform_buffer::<ViewUniform>(true),
+                uniform_buffer::<RaytraceLightsUniform>(false),
             ),
         ),
     );
@@ -189,6 +192,7 @@ impl ViewNode for RaytraceNode {
         Read<ViewPrepassTextures>,
         Read<ViewUniformOffset>,
         Read<RaytraceOutputTexture>,
+        Read<RaytraceViewLights>,
     );
 
     fn run<'w>(
@@ -201,6 +205,7 @@ impl ViewNode for RaytraceNode {
             prepass_textures,
             view_uniform_offset,
             output_texture,
+            view_lights,
         ): QueryItem<'w, '_, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
@@ -211,6 +216,10 @@ impl ViewNode for RaytraceNode {
 
         let Some(compute_pipeline) = pipeline_cache.get_compute_pipeline(pipelines.compute_pipeline)
         else {
+            bevy::log::warn!(
+                "bevy_raytrace: compute pipeline not ready: {:?}",
+                pipeline_cache.get_compute_pipeline_state(pipelines.compute_pipeline)
+            );
             return Ok(());
         };
         let composite_pipeline_id = match raytrace_view.debug {
@@ -220,17 +229,38 @@ impl ViewNode for RaytraceNode {
         };
         let Some(composite_pipeline) = pipeline_cache.get_render_pipeline(composite_pipeline_id)
         else {
+            bevy::log::warn!(
+                "bevy_raytrace: composite pipeline not ready: {:?}",
+                pipeline_cache.get_render_pipeline_state(composite_pipeline_id)
+            );
             return Ok(());
         };
-        let (Some(scene_bind_group), Some(depth_view), Some(normal_view), Some(view_uniform_binding)) = (
-            scene_bindings.bind_group.as_ref(),
-            prepass_textures.depth_view(),
-            prepass_textures.normal_view(),
-            view_uniforms.uniforms.binding(),
-        ) else {
+        let Some(scene_bind_group) = scene_bindings.bind_group.as_ref() else {
+            bevy::log::warn!("bevy_raytrace: missing scene bind group");
+            return Ok(());
+        };
+        let Some(deferred_view) = prepass_textures.deferred_view() else {
+            bevy::log::warn!("bevy_raytrace: missing deferred prepass view");
+            return Ok(());
+        };
+        let Some(depth_view) = prepass_textures.depth_view() else {
+            bevy::log::warn!("bevy_raytrace: missing depth prepass view");
+            return Ok(());
+        };
+        let Some(normal_view) = prepass_textures.normal_view() else {
+            bevy::log::warn!("bevy_raytrace: missing normal prepass view");
+            return Ok(());
+        };
+        let Some(view_uniform_binding) = view_uniforms.uniforms.binding() else {
+            bevy::log::warn!("bevy_raytrace: missing view uniform binding");
+            return Ok(());
+        };
+        let Some(light_binding) = view_lights.uniform.binding() else {
+            bevy::log::warn!("bevy_raytrace: missing light uniform binding");
             return Ok(());
         };
         if output_texture.size.width == 0 || output_texture.size.height == 0 {
+            bevy::log::warn!("bevy_raytrace: output texture has zero size");
             return Ok(());
         }
 
@@ -239,9 +269,11 @@ impl ViewNode for RaytraceNode {
             &pipeline_cache.get_bind_group_layout(&pipelines.compute_layout),
             &BindGroupEntries::sequential((
                 &output_texture.view,
+                deferred_view,
                 depth_view,
                 normal_view,
                 view_uniform_binding,
+                light_binding,
             )),
         );
 

@@ -8,10 +8,5 @@
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let source = textureSample(source_texture, linear_sampler, in.uv);
     let traced = textureSample(raytrace_texture, linear_sampler, in.uv);
-    let strength = clamp(traced.a, 0.0, 1.0);
-    let visibility = clamp(traced.r, 0.0, 1.0);
-    let shadow_factor = mix(0.18, 1.0, visibility);
-    let shaded = source.rgb * shadow_factor;
-    let color = mix(source.rgb, shaded, strength);
-    return vec4(color, source.a);
+    return vec4(max(source.rgb - traced.rgb, vec3(0.0)), source.a);
 }

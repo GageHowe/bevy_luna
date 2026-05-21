@@ -1,10 +1,10 @@
-//! Experimental real-time raytraced lighting for Bevy without temporal history.
+//! Experimental real-time raytraced shadow replacement for Bevy without temporal history.
 
 mod realtime;
 mod scene;
 
 pub use realtime::{
-    RaytraceCapabilities, RaytraceDebugMode, RaytraceManagedView, RaytraceQuality,
+    RaytraceCapabilities, RaytraceDebugMode, RaytraceManagedView, RaytraceMode, RaytraceQuality,
     RaytraceSettings, RaytraceView, RaytraceViewPlugin, RenderRaytraceDiagnostics,
 };
 pub use scene::{DisableRaytracingMesh, RaytraceScenePlugin, RaytracingMesh3d};
@@ -17,7 +17,7 @@ use bevy_solari::SolariPlugins;
 pub mod prelude {
     pub use crate::{
         DisableRaytracingMesh, RaytraceDebugMode, RaytraceManagedView, RaytracePlugins,
-        RaytraceCapabilities, RaytraceQuality, RaytraceScenePlugin, RaytraceSettings,
+        RaytraceCapabilities, RaytraceMode, RaytraceQuality, RaytraceScenePlugin, RaytraceSettings,
         RaytraceView, RaytraceViewPlugin, RaytracingMesh3d, RenderRaytraceDiagnostics,
     };
 }

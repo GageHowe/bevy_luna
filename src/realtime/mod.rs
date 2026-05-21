@@ -5,8 +5,10 @@ use crate::RaytracePlugins;
 use bevy::{
     app::{App, Plugin, PostUpdate},
     camera::Camera3d,
-    core_pipeline::prepass::{DepthPrepass, NormalPrepass},
+    core_pipeline::prepass::{DeferredPrepass, DepthPrepass, NormalPrepass},
     ecs::{component::Component, prelude::ReflectComponent},
+    light::{cluster::VisibleClusterableObjects, PointLight, SimulationLightSystems},
+    pbr::DefaultOpaqueRendererMethod,
     prelude::*,
     reflect::{Reflect, std_traits::ReflectDefault},
     render::{
@@ -19,14 +21,19 @@ use bevy::{
     },
 };
 use node::{load_internal_assets, setup_render_app};
-use prepare::{RaytraceOutputTexture, prepare_raytrace_output_textures};
+use prepare::{
+    GpuPointLight, MAX_POINT_LIGHTS, RaytraceOutputTexture, RaytraceViewLights,
+    prepare_raytrace_output_textures, prepare_raytrace_view_lights,
+};
+use crate::scene::RaytracingMesh3d;
+use bevy_solari::scene::RaytracingSceneBindings;
 
 /// Runtime settings used to enable or disable the raytraced path.
 #[derive(Resource, Clone, Debug, Reflect, ExtractResource)]
 #[reflect(Resource, Default, Clone)]
 pub struct RaytraceSettings {
-    /// Enables the crate for managed cameras.
-    pub enabled: bool,
+    /// Selects the active shadowing model for managed cameras.
+    pub mode: RaytraceMode,
     /// Enables raytraced direct lighting.
     pub direct_lighting: bool,
     /// Default quality preset used when a managed view is activated.
@@ -40,13 +47,23 @@ pub struct RaytraceSettings {
 impl Default for RaytraceSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            mode: RaytraceMode::Bevy,
             direct_lighting: true,
             quality: RaytraceQuality::Balanced,
             max_ray_distance: 200.0,
             debug: RaytraceDebugMode::None,
         }
     }
+}
+
+/// Runtime rendering mode for managed views.
+#[derive(Clone, Copy, Debug, Default, Reflect, PartialEq, Eq)]
+pub enum RaytraceMode {
+    /// Use Bevy's normal rasterized shadowing path.
+    #[default]
+    Bevy,
+    /// Use the raytraced shadowing path.
+    RaytracedShadows,
 }
 
 /// Simple quality presets for the eventual real-time renderer.
@@ -82,7 +99,7 @@ pub struct RaytraceManagedView;
 /// Per-camera raytracing configuration.
 #[derive(Component, Clone, Debug, Reflect, ExtractComponent)]
 #[reflect(Component, Default, Clone)]
-#[require(Hdr, DepthPrepass, NormalPrepass)]
+#[require(Hdr, DeferredPrepass, DepthPrepass, NormalPrepass)]
 pub struct RaytraceView {
     /// Enables direct lighting for this camera.
     pub direct_lighting: bool,
@@ -103,6 +120,12 @@ impl Default for RaytraceView {
             debug: RaytraceDebugMode::None,
         }
     }
+}
+
+#[derive(Component, Clone, Debug, Default, ExtractComponent)]
+pub struct RaytraceLightSelection {
+    pub point_lights: [GpuPointLight; MAX_POINT_LIGHTS],
+    pub point_light_count: u32,
 }
 
 /// Render-world diagnostics gathered by the placeholder MVP pipeline.
@@ -129,7 +152,9 @@ pub struct RaytraceViewPlugin;
 impl Plugin for RaytraceViewPlugin {
     fn build(&self, app: &mut App) {
         load_internal_assets(app);
-        app.register_type::<RaytraceSettings>()
+        app.insert_resource(DefaultOpaqueRendererMethod::deferred())
+            .register_type::<RaytraceSettings>()
+            .register_type::<RaytraceMode>()
             .register_type::<RaytraceQuality>()
             .register_type::<RaytraceDebugMode>()
             .register_type::<RaytraceCapabilities>()
@@ -140,12 +165,16 @@ impl Plugin for RaytraceViewPlugin {
             .init_resource::<RenderRaytraceDiagnostics>()
             .add_plugins((
                 ExtractComponentPlugin::<RaytraceView>::default(),
+                ExtractComponentPlugin::<RaytraceLightSelection>::default(),
                 ExtractResourcePlugin::<RaytraceSettings>::default(),
             ))
             .add_systems(
                 PostUpdate,
                 (
                     sync_managed_views,
+                    sync_relevant_lights
+                        .after(sync_managed_views)
+                        .after(SimulationLightSystems::AssignLightsToClusters),
                     validate_raytrace_views,
                     prepare_raytrace_diagnostics,
                 ),
@@ -184,7 +213,12 @@ impl Plugin for RaytraceViewPlugin {
         setup_render_app(render_app);
         render_app.add_systems(
             Render,
-            prepare_raytrace_output_textures.in_set(RenderSystems::PrepareResources),
+            (
+                prepare_raytrace_output_textures,
+                prepare_raytrace_view_lights,
+                log_render_raytrace_state.after(prepare_raytrace_view_lights),
+            )
+                .in_set(RenderSystems::PrepareResources),
         );
     }
 }
@@ -196,7 +230,7 @@ fn sync_managed_views(
     mut managed_views: Query<(Entity, Option<&mut RaytraceView>), With<RaytraceManagedView>>,
 ) {
     for (entity, view) in &mut managed_views {
-        if settings.enabled && capabilities.hardware_ray_query {
+        if settings.mode == RaytraceMode::RaytracedShadows && capabilities.hardware_ray_query {
             let next_view = RaytraceView {
                 direct_lighting: settings.direct_lighting,
                 quality: settings.quality,
@@ -223,6 +257,66 @@ fn validate_raytrace_views(raytrace_views: Query<(Entity, &Msaa), With<RaytraceV
     }
 }
 
+fn sync_relevant_lights(
+    mut commands: Commands,
+    managed_views: Query<
+        (
+            Entity,
+            Option<&RaytraceView>,
+            Option<&VisibleClusterableObjects>,
+            &GlobalTransform,
+        ),
+        With<RaytraceManagedView>,
+    >,
+    point_lights: Query<(&PointLight, &GlobalTransform)>,
+) {
+    for (entity, raytrace_view, visible_lights, camera_transform) in &managed_views {
+        if raytrace_view.is_none() {
+            commands.entity(entity).remove::<RaytraceLightSelection>();
+            continue;
+        }
+
+        let camera_position = camera_transform.translation();
+        let mut scored = visible_lights
+            .map(|visible_lights| {
+                visible_lights
+                    .entities
+                    .iter()
+                    .filter_map(|light_entity| {
+                        let (light, transform) = point_lights.get(*light_entity).ok()?;
+                        let distance_sq =
+                            camera_position.distance_squared(transform.translation()).max(1.0);
+                        let score = (light.intensity * light.range * light.range) / distance_sq;
+                        Some((
+                            score,
+                            GpuPointLight {
+                                position_range: transform.translation().extend(light.range),
+                                color_intensity: light
+                                    .color
+                                    .to_linear()
+                                    .to_vec3()
+                                    .extend(light.intensity),
+                            },
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+        let mut selection = RaytraceLightSelection::default();
+        for (_, light) in scored {
+            if (selection.point_light_count as usize) < MAX_POINT_LIGHTS {
+                selection.point_lights[selection.point_light_count as usize] = light;
+                selection.point_light_count += 1;
+            }
+        }
+
+        commands.entity(entity).insert(selection);
+    }
+}
+
 fn prepare_raytrace_diagnostics(
     mut diagnostics: ResMut<RenderRaytraceDiagnostics>,
     raytrace_views: Query<&RaytraceView>,
@@ -232,6 +326,47 @@ fn prepare_raytrace_diagnostics(
     diagnostics.prepared_outputs = output_textures.iter().count();
 }
 
+fn log_render_raytrace_state(
+    raytrace_views: Query<
+        (
+            Entity,
+            Option<&RaytraceOutputTexture>,
+            Option<&RaytraceViewLights>,
+        ),
+        With<RaytraceView>,
+    >,
+    raytrace_instances: Query<&RaytracingMesh3d>,
+    scene_bindings: Res<RaytracingSceneBindings>,
+    mut frames: Local<u32>,
+) {
+    *frames += 1;
+    if *frames % 120 != 0 {
+        return;
+    }
+
+    let active_views = raytrace_views.iter().count();
+    if active_views == 0 {
+        return;
+    }
+
+    let mut views_with_output = 0usize;
+    let mut views_with_lights = 0usize;
+    for (_, output, lights) in &raytrace_views {
+        if output.is_some() {
+            views_with_output += 1;
+        }
+        if lights.is_some() {
+            views_with_lights += 1;
+        }
+    }
+
+    info!(
+        "bevy_raytrace render state: active_views={active_views} extracted_instances={} scene_bind_group={} views_with_output={views_with_output} views_with_lights={views_with_lights}",
+        raytrace_instances.iter().count(),
+        scene_bindings.bind_group.is_some(),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,7 +374,7 @@ mod tests {
     #[test]
     fn settings_default_to_a_safe_runtime_toggle_off_state() {
         let settings = RaytraceSettings::default();
-        assert!(!settings.enabled);
+        assert_eq!(settings.mode, RaytraceMode::Bevy);
         assert!(settings.direct_lighting);
     }
 

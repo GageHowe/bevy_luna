@@ -1,20 +1,23 @@
 #![allow(missing_docs, reason = "Example entrypoint")]
 
-use bevy::{
-    pbr::MeshMaterial3d, prelude::*,
-};
+use bevy::{light::PointLightShadowMap, pbr::MeshMaterial3d, prelude::*};
 use bevy_raytrace::prelude::*;
+
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum ShadowRenderMode {
+    #[default]
+    Bevy,
+    Raytraced,
+}
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(RaytracePlugins)
-        .insert_resource(RaytraceSettings {
-            enabled: true,
-            ..default()
-        })
+        .init_resource::<ShadowRenderMode>()
         .add_systems(Startup, setup)
-        .add_systems(Update, (toggle_raytracing, toggle_debug_view, animate_lights))
+        .add_systems(Update, (toggle_shadow_mode, apply_shadow_mode).chain())
+        .add_systems(Update, (toggle_debug_view, animate_lights))
         .run();
 }
 
@@ -23,8 +26,10 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    commands.insert_resource(RaytraceSettings::default());
+    commands.insert_resource(PointLightShadowMap { size: 64 });
     commands.insert_resource(GlobalAmbientLight {
-        brightness: 6.0,
+        brightness: 10.0,
         ..default()
     });
 
@@ -42,8 +47,8 @@ fn setup(
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(18.0, 18.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.16, 0.18, 0.21),
-            perceptual_roughness: 1.0,
+            base_color: Color::srgb(0.24, 0.25, 0.28),
+            perceptual_roughness: 0.95,
             metallic: 0.0,
             ..default()
         })),
@@ -53,7 +58,7 @@ fn setup(
         Mesh3d(meshes.add(Sphere::new(1.35).mesh().uv(48, 32))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.90, 0.28, 0.18),
-            perceptual_roughness: 0.62,
+            perceptual_roughness: 0.48,
             metallic: 0.0,
             reflectance: 0.25,
             ..default()
@@ -62,40 +67,40 @@ fn setup(
     ));
 
     commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(1.0, 2.2, 1.0))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.72, 0.76, 0.80),
+            perceptual_roughness: 0.85,
+            ..default()
+        })),
+        Transform::from_xyz(-2.2, 1.1, -0.8),
+    ));
+
+    commands.spawn((
         PointLight {
-            intensity: 420_000.0,
+            intensity: 900_000.0,
             color: Color::srgb(1.0, 0.72, 0.54),
-            range: 18.0,
+            range: 14.0,
             radius: 0.08,
-            shadows_enabled: false,
+            shadows_enabled: true,
             ..default()
         },
-        Transform::from_xyz(2.6, 2.8, 1.3),
+        Transform::from_xyz(2.3, 2.6, 0.8),
         OrbitingPointLight,
     ));
 
     commands.spawn((
         SpotLight {
-            intensity: 520_000.0,
+            intensity: 180_000.0,
             color: Color::srgb(0.60, 0.78, 1.0),
-            range: 18.0,
+            range: 16.0,
             inner_angle: 0.24,
             outer_angle: 0.42,
             shadows_enabled: false,
             ..default()
         },
-        Transform::from_xyz(-3.4, 4.6, 3.0).looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
+        Transform::from_xyz(-3.8, 4.8, 2.4).looking_at(Vec3::new(-1.2, 1.0, 0.4), Vec3::Y),
         SweepingSpotLight,
-    ));
-
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 24_000.0,
-            color: Color::srgb(1.0, 0.96, 0.92),
-            shadows_enabled: false,
-            ..default()
-        },
-        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.62, -0.92, 0.0)),
     ));
 }
 
@@ -128,7 +133,7 @@ fn animate_lights(
 ) {
     let orbit_angle = time.elapsed_secs() * 0.75;
     for mut transform in &mut point_lights {
-        transform.translation = Vec3::new(orbit_angle.cos() * 2.9, 2.8, orbit_angle.sin() * 2.1);
+        transform.translation = Vec3::new(orbit_angle.cos() * 2.2, 2.5, orbit_angle.sin() * 1.5);
     }
 
     let sweep = time.elapsed_secs() * 0.9;
@@ -139,10 +144,29 @@ fn animate_lights(
     }
 }
 
-fn toggle_raytracing(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<RaytraceSettings>) {
+fn toggle_shadow_mode(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<ShadowRenderMode>) {
     if keys.just_pressed(KeyCode::KeyR) {
-        settings.enabled = !settings.enabled;
-        info!("raytracing enabled: {}", settings.enabled);
+        *mode = match *mode {
+            ShadowRenderMode::Bevy => ShadowRenderMode::Raytraced,
+            ShadowRenderMode::Raytraced => ShadowRenderMode::Bevy,
+        };
+        info!("shadow mode: {:?}", *mode);
+    }
+}
+
+fn apply_shadow_mode(
+    mode: Res<ShadowRenderMode>,
+    mut settings: ResMut<RaytraceSettings>,
+    mut point_lights: Query<&mut PointLight, Without<SpotLight>>,
+) {
+    let raytraced = *mode == ShadowRenderMode::Raytraced;
+    settings.mode = if raytraced {
+        RaytraceMode::RaytracedShadows
+    } else {
+        RaytraceMode::Bevy
+    };
+    for mut light in &mut point_lights {
+        light.shadows_enabled = !raytraced;
     }
 }
 
