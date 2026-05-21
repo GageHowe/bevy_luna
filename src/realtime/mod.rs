@@ -43,7 +43,7 @@ pub struct RaytraceSettings {
 impl Default for RaytraceSettings {
     fn default() -> Self {
         Self {
-            mode: RaytraceMode::RaytracedShadows,
+            mode: RaytraceMode::Bevy,
             quality: RaytraceQuality::Balanced,
             debug: RaytraceDebugMode::None,
         }
@@ -269,59 +269,32 @@ fn validate_raytrace_views(raytrace_views: Query<(Entity, &Msaa), With<RaytraceV
 }
 
 fn sync_supported_light_baselines(
-    settings: Res<RaytraceSettings>,
     mut commands: Commands,
     directional_lights: Query<(Entity, &DirectionalLight, Option<&RaytraceDirectionalLight>)>,
     point_lights: Query<(Entity, &PointLight, Option<&RaytracePunctualLight>), Without<SpotLight>>,
     spot_lights: Query<(Entity, &SpotLight, Option<&RaytracePunctualLight>), Without<PointLight>>,
 ) {
-    let capture_live_values = settings.mode == RaytraceMode::Bevy;
-
     for (entity, light, baseline) in &directional_lights {
-        match baseline {
-            Some(baseline) if capture_live_values && baseline.illuminance != light.illuminance => {
-                commands.entity(entity).insert(RaytraceDirectionalLight {
-                    illuminance: light.illuminance,
-                });
-            }
-            None => {
-                commands.entity(entity).insert(RaytraceDirectionalLight {
-                    illuminance: light.illuminance,
-                });
-            }
-            _ => {}
+        if baseline.is_none() {
+            commands.entity(entity).insert(RaytraceDirectionalLight {
+                illuminance: light.illuminance,
+            });
         }
     }
 
     for (entity, light, baseline) in &point_lights {
-        match baseline {
-            Some(baseline) if capture_live_values && baseline.intensity != light.intensity => {
-                commands.entity(entity).insert(RaytracePunctualLight {
-                    intensity: light.intensity,
-                });
-            }
-            None => {
-                commands.entity(entity).insert(RaytracePunctualLight {
-                    intensity: light.intensity,
-                });
-            }
-            _ => {}
+        if baseline.is_none() {
+            commands.entity(entity).insert(RaytracePunctualLight {
+                intensity: light.intensity,
+            });
         }
     }
 
     for (entity, light, baseline) in &spot_lights {
-        match baseline {
-            Some(baseline) if capture_live_values && baseline.intensity != light.intensity => {
-                commands.entity(entity).insert(RaytracePunctualLight {
-                    intensity: light.intensity,
-                });
-            }
-            None => {
-                commands.entity(entity).insert(RaytracePunctualLight {
-                    intensity: light.intensity,
-                });
-            }
-            _ => {}
+        if baseline.is_none() {
+            commands.entity(entity).insert(RaytracePunctualLight {
+                intensity: light.intensity,
+            });
         }
     }
 }
@@ -520,7 +493,7 @@ mod tests {
     #[test]
     fn settings_default_to_a_safe_runtime_toggle_off_state() {
         let settings = RaytraceSettings::default();
-        assert_eq!(settings.mode, RaytraceMode::RaytracedShadows);
+        assert_eq!(settings.mode, RaytraceMode::Bevy);
         assert_eq!(settings.quality, RaytraceQuality::Balanced);
     }
 
