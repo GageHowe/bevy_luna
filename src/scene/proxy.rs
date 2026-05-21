@@ -13,7 +13,7 @@ pub struct RaytraceProxyMeshes(pub HashMap<AssetId<Mesh>, Handle<Mesh>>);
 pub fn tag_raytracing_meshes(
     mut commands: Commands,
     mut meshes_assets: ResMut<Assets<Mesh>>,
-    proxy_meshes: Option<ResMut<RaytraceProxyMeshes>>,
+    mut proxy_meshes: ResMut<RaytraceProxyMeshes>,
     meshes: Query<
         (Entity, &Mesh3d),
         (
@@ -23,12 +23,9 @@ pub fn tag_raytracing_meshes(
         ),
     >,
 ) {
-    let proxy_meshes = proxy_meshes;
-    if proxy_meshes.is_none() {
-        commands.init_resource::<RaytraceProxyMeshes>();
-        return;
-    }
-    let mut proxy_meshes = proxy_meshes.expect("checked is_some above");
+    proxy_meshes
+        .0
+        .retain(|source_id, proxy| meshes_assets.contains(*source_id) && meshes_assets.contains(proxy.id()));
 
     for (entity, mesh) in &meshes {
         let source_id = mesh.id();

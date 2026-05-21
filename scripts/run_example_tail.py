@@ -32,7 +32,7 @@ def main() -> int:
 
     repo_root = Path(__file__).resolve().parent.parent
     if args.cargo:
-        cmd = ["cargo", "run", "-p", "bevy_raytrace", "--example", args.example]
+        cmd = ["cargo", "run", "-p", "bevy_luna", "--example", args.example]
     else:
         cmd = [str(repo_root / "target" / "debug" / "examples" / args.example)]
 

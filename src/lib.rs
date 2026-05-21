@@ -2,14 +2,18 @@
 //!
 //! Add [`RaytracePlugins`] to enable the raytraced path on supported hardware.
 //! Omit the plugin to keep plain Bevy rendering.
+//!
+//! By default, all `Camera3d` views and supported directional/point/spot
+//! lights are managed automatically. Use [`DisableRaytraceView`] or
+//! [`DisableRaytraceLight`] to opt specific entities out.
 
 mod realtime;
 mod scene;
 
 pub use realtime::{
-    RaytraceCapabilities, RaytraceDebugMode, RaytraceDirectionalLight, RaytraceManagedView,
-    RaytraceMode, RaytracePunctualLight, RaytraceQuality, RaytraceSettings, RaytraceView,
-    RaytraceViewPlugin,
+    DisableRaytraceLight, DisableRaytraceView, RaytraceCapabilities, RaytraceDebugMode,
+    RaytraceDirectionalLight, RaytraceMode, RaytracePunctualLight, RaytraceQuality,
+    RaytraceSettings, RaytraceView, RaytraceViewPlugin,
 };
 pub use scene::{DisableRaytracingMesh, RaytraceScenePlugin, RaytracingMesh3d};
 
@@ -17,13 +21,13 @@ use bevy::app::{PluginGroup, PluginGroupBuilder};
 use bevy::render::settings::WgpuFeatures;
 use bevy_solari::SolariPlugins;
 
-/// Prelude exports for users of `bevy_raytrace`.
+/// Prelude exports for users of `bevy_luna`.
 pub mod prelude {
     pub use crate::{
-        DisableRaytracingMesh, RaytraceDebugMode, RaytraceDirectionalLight, RaytraceManagedView,
-        RaytracePlugins, RaytraceCapabilities, RaytraceMode, RaytracePunctualLight,
-        RaytraceQuality, RaytraceScenePlugin, RaytraceSettings, RaytraceView,
-        RaytraceViewPlugin, RaytracingMesh3d,
+        DisableRaytraceLight, DisableRaytraceView, DisableRaytracingMesh, RaytraceCapabilities,
+        RaytraceDebugMode, RaytraceDirectionalLight, RaytraceMode, RaytracePlugins,
+        RaytracePunctualLight, RaytraceQuality, RaytraceScenePlugin, RaytraceSettings,
+        RaytraceView, RaytraceViewPlugin, RaytracingMesh3d,
     };
 }
 

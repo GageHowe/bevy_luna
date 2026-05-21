@@ -1,7 +1,7 @@
 #![allow(missing_docs, reason = "Example entrypoint")]
 
 use bevy::{light::PointLightShadowMap, pbr::MeshMaterial3d, prelude::*};
-use bevy_raytrace::prelude::*;
+use bevy_luna::prelude::*;
 
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum ShadowRenderMode {
@@ -41,7 +41,6 @@ fn setup(
             ..default()
         },
         Transform::from_xyz(6.4, 4.0, 7.2).looking_at(Vec3::new(0.0, 1.1, 0.0), Vec3::Y),
-        RaytraceManagedView,
     ));
 
     commands.spawn((
@@ -87,9 +86,6 @@ fn setup(
         },
         Transform::from_xyz(2.3, 2.6, 0.8),
         OrbitingPointLight,
-        RaytracePunctualLight {
-            intensity: 900_000.0,
-        },
     ));
 
     commands.spawn((
@@ -104,9 +100,6 @@ fn setup(
         },
         Transform::from_xyz(-3.8, 4.8, 2.4).looking_at(Vec3::new(-1.2, 1.0, 0.4), Vec3::Y),
         SweepingSpotLight,
-        RaytracePunctualLight {
-            intensity: 180_000.0,
-        },
     ));
 }
 

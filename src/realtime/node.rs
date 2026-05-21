@@ -220,7 +220,7 @@ impl ViewNode for RaytraceNode {
             if let CachedPipelineState::Err(err) =
                 pipeline_cache.get_compute_pipeline_state(pipelines.compute_pipeline)
             {
-                bevy::log::warn!("bevy_raytrace: compute pipeline failed: {err:?}");
+                bevy::log::warn!("bevy_luna: compute pipeline failed: {err:?}");
             }
             return Ok(());
         };
@@ -234,36 +234,36 @@ impl ViewNode for RaytraceNode {
             if let CachedPipelineState::Err(err) =
                 pipeline_cache.get_render_pipeline_state(composite_pipeline_id)
             {
-                bevy::log::warn!("bevy_raytrace: composite pipeline failed: {err:?}");
+                bevy::log::warn!("bevy_luna: composite pipeline failed: {err:?}");
             }
             return Ok(());
         };
         let Some(scene_bind_group) = scene_bindings.bind_group.as_ref() else {
-            bevy::log::warn!("bevy_raytrace: missing scene bind group");
+            bevy::log::warn!("bevy_luna: missing scene bind group");
             return Ok(());
         };
         let Some(deferred_view) = prepass_textures.deferred_view() else {
-            bevy::log::warn!("bevy_raytrace: missing deferred prepass view");
+            bevy::log::warn!("bevy_luna: missing deferred prepass view");
             return Ok(());
         };
         let Some(depth_view) = prepass_textures.depth_view() else {
-            bevy::log::warn!("bevy_raytrace: missing depth prepass view");
+            bevy::log::warn!("bevy_luna: missing depth prepass view");
             return Ok(());
         };
         let Some(normal_view) = prepass_textures.normal_view() else {
-            bevy::log::warn!("bevy_raytrace: missing normal prepass view");
+            bevy::log::warn!("bevy_luna: missing normal prepass view");
             return Ok(());
         };
         let Some(view_uniform_binding) = view_uniforms.uniforms.binding() else {
-            bevy::log::warn!("bevy_raytrace: missing view uniform binding");
+            bevy::log::warn!("bevy_luna: missing view uniform binding");
             return Ok(());
         };
         let Some(light_binding) = view_lights.uniform.binding() else {
-            bevy::log::warn!("bevy_raytrace: missing light uniform binding");
+            bevy::log::warn!("bevy_luna: missing light uniform binding");
             return Ok(());
         };
         if output_texture.size.width == 0 || output_texture.size.height == 0 {
-            bevy::log::warn!("bevy_raytrace: output texture has zero size");
+            bevy::log::warn!("bevy_luna: output texture has zero size");
             return Ok(());
         }
 

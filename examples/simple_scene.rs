@@ -3,7 +3,7 @@
 use bevy::{
     pbr::MeshMaterial3d, prelude::*,
 };
-use bevy_raytrace::prelude::*;
+use bevy_luna::prelude::*;
 
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum ShadowRenderMode {
@@ -42,7 +42,6 @@ fn setup(
             ..default()
         },
         Transform::from_xyz(0.0, 4.0, 9.0).looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
-        RaytraceManagedView,
     ));
 
     commands.spawn((
@@ -53,9 +52,6 @@ fn setup(
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.72, -0.92, 0.0)),
-        RaytraceDirectionalLight {
-            illuminance: 35_000.0,
-        },
     ));
 
     commands.spawn((

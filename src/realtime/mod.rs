@@ -1,5 +1,7 @@
 mod node;
 mod prepare;
+mod selection;
+mod shared;
 
 use crate::RaytracePlugins;
 use bevy::{
@@ -24,9 +26,14 @@ use bevy::{
 };
 use node::{load_internal_assets, setup_render_app};
 use prepare::{
-    GpuDirectionalLight, GpuPunctualLight, MAX_DIRECTIONAL_LIGHTS, MAX_PUNCTUAL_LIGHTS,
-    prepare_raytrace_output_textures, prepare_raytrace_view_lights,
+    GpuDirectionalLight, GpuPunctualLight, prepare_raytrace_output_textures,
+    prepare_raytrace_view_lights,
 };
+use selection::{
+    pack_directional_light, pack_point_light, pack_spot_light, push_directional_light,
+    push_punctual_light,
+};
+use shared::{MAX_DIRECTIONAL_LIGHTS, MAX_PUNCTUAL_LIGHTS};
 
 /// Runtime settings used to enable or disable the raytraced path.
 #[derive(Resource, Clone, Debug, Reflect, ExtractResource)]
@@ -51,13 +58,18 @@ impl Default for RaytraceSettings {
 }
 
 /// Runtime rendering mode for managed views.
-#[derive(Clone, Copy, Debug, Default, Reflect, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Reflect, PartialEq, Eq)]
 pub enum RaytraceMode {
-    /// Use Bevy's normal rasterized shadowing path.
-    #[default]
-    Bevy,
     /// Use the raytraced shadowing path.
     RaytracedShadows,
+    /// Use Bevy's normal rasterized shadowing path.
+    Bevy,
+}
+
+impl Default for RaytraceMode {
+    fn default() -> Self {
+        Self::RaytracedShadows
+    }
 }
 
 /// Simple quality presets for the eventual real-time renderer.
@@ -84,20 +96,23 @@ pub enum RaytraceDebugMode {
     DirectLighting,
 }
 
-/// Optional marker for cameras whose `RaytraceView` should be managed by `RaytraceSettings`.
-///
-/// The plugin currently auto-manages all `Camera3d` views. This marker remains
-/// as a stable opt-in API surface and for explicitness in examples.
+/// Opts a camera out of automatic raytraced view management.
 #[derive(Component, Clone, Copy, Debug, Default, Reflect, PartialEq, Eq)]
 #[reflect(Component, Default, PartialEq)]
 #[require(Camera3d)]
-pub struct RaytraceManagedView;
+pub struct DisableRaytraceView;
 
-/// Explicit directional light data for the raytraced path.
+/// Opts a supported light out of automatic raytraced shadow ownership.
+#[derive(Component, Clone, Copy, Debug, Default, Reflect, PartialEq, Eq)]
+#[reflect(Component, Default, PartialEq)]
+pub struct DisableRaytraceLight;
+
+/// Optional directional-light baseline override for the raytraced path.
 ///
-/// Attach this to lights that should switch between Bevy shadow maps and the
-/// raytraced shadow path at runtime. In `RaytracedShadows` mode the plugin
-/// temporarily zeros the Bevy light and re-lights it in the compute pass.
+/// By default, `bevy_luna` captures the authored Bevy light value once and uses
+/// that as the baseline when switching between Bevy and raytraced modes.
+/// Attach this component only if you need to pin a different directional-light
+/// baseline for raytraced mode.
 #[derive(Component, Clone, Copy, Debug, Default, Reflect, PartialEq)]
 #[reflect(Component, Default, PartialEq)]
 pub struct RaytraceDirectionalLight {
@@ -105,11 +120,12 @@ pub struct RaytraceDirectionalLight {
     pub illuminance: f32,
 }
 
-/// Explicit point/spot light data for the raytraced path.
+/// Optional point/spot baseline override for the raytraced path.
 ///
-/// Attach this to lights that should switch between Bevy shadow maps and the
-/// raytraced shadow path at runtime. In `RaytracedShadows` mode the plugin
-/// temporarily zeros the Bevy light and re-lights it in the compute pass.
+/// By default, `bevy_luna` captures the authored Bevy light value once and uses
+/// that as the baseline when switching between Bevy and raytraced modes.
+/// Attach this component only if you need to pin a different point/spot light
+/// baseline for raytraced mode.
 #[derive(Component, Clone, Copy, Debug, Default, Reflect, PartialEq)]
 #[reflect(Component, Default, PartialEq)]
 pub struct RaytracePunctualLight {
@@ -153,6 +169,16 @@ pub struct RaytraceCapabilities {
     pub hardware_ray_query: bool,
 }
 
+#[derive(Component, Clone, Copy, Debug, Default)]
+struct CapturedDirectionalBaseline {
+    illuminance: f32,
+}
+
+#[derive(Component, Clone, Copy, Debug, Default)]
+struct CapturedPunctualBaseline {
+    intensity: f32,
+}
+
 /// Realtime-side systems for managed views, extraction, and validation.
 pub struct RaytraceViewPlugin;
 
@@ -165,7 +191,8 @@ impl Plugin for RaytraceViewPlugin {
             .register_type::<RaytraceQuality>()
             .register_type::<RaytraceDebugMode>()
             .register_type::<RaytraceCapabilities>()
-            .register_type::<RaytraceManagedView>()
+            .register_type::<DisableRaytraceView>()
+            .register_type::<DisableRaytraceLight>()
             .register_type::<RaytraceDirectionalLight>()
             .register_type::<RaytracePunctualLight>()
             .register_type::<RaytraceView>()
@@ -215,7 +242,7 @@ impl Plugin for RaytraceViewPlugin {
                 .expect("render app should still be available");
             let render_device = render_app.world().resource::<RenderDevice>();
             warn!(
-                "bevy_raytrace loaded on an adapter without hardware ray-query support. Managed raytraced views will stay disabled and Bevy rasterization will continue normally. Missing features: {:?}",
+                "bevy_luna loaded on an adapter without hardware ray-query support. Managed raytraced views will stay disabled and Bevy rasterization will continue normally. Missing features: {:?}",
                 RaytracePlugins::required_wgpu_features().difference(render_device.features())
             );
             return;
@@ -240,7 +267,10 @@ fn sync_managed_views(
     mut commands: Commands,
     capabilities: Res<RaytraceCapabilities>,
     settings: Res<RaytraceSettings>,
-    mut managed_views: Query<(Entity, Option<&mut RaytraceView>), With<Camera3d>>,
+    mut managed_views: Query<
+        (Entity, Option<&mut RaytraceView>),
+        (With<Camera3d>, Without<DisableRaytraceView>),
+    >,
 ) {
     for (entity, view) in &mut managed_views {
         if settings.mode == RaytraceMode::RaytracedShadows && capabilities.hardware_ray_query {
@@ -270,13 +300,34 @@ fn validate_raytrace_views(raytrace_views: Query<(Entity, &Msaa), With<RaytraceV
 
 fn sync_supported_light_baselines(
     mut commands: Commands,
-    directional_lights: Query<(Entity, &DirectionalLight, Option<&RaytraceDirectionalLight>)>,
-    point_lights: Query<(Entity, &PointLight, Option<&RaytracePunctualLight>), Without<SpotLight>>,
-    spot_lights: Query<(Entity, &SpotLight, Option<&RaytracePunctualLight>), Without<PointLight>>,
+    directional_lights: Query<
+        (
+            Entity,
+            &DirectionalLight,
+            Option<&CapturedDirectionalBaseline>,
+        ),
+        Without<DisableRaytraceLight>,
+    >,
+    point_lights: Query<
+        (
+            Entity,
+            &PointLight,
+            Option<&CapturedPunctualBaseline>,
+        ),
+        (Without<SpotLight>, Without<DisableRaytraceLight>),
+    >,
+    spot_lights: Query<
+        (
+            Entity,
+            &SpotLight,
+            Option<&CapturedPunctualBaseline>,
+        ),
+        (Without<PointLight>, Without<DisableRaytraceLight>),
+    >,
 ) {
     for (entity, light, baseline) in &directional_lights {
         if baseline.is_none() {
-            commands.entity(entity).insert(RaytraceDirectionalLight {
+            commands.entity(entity).insert(CapturedDirectionalBaseline {
                 illuminance: light.illuminance,
             });
         }
@@ -284,7 +335,7 @@ fn sync_supported_light_baselines(
 
     for (entity, light, baseline) in &point_lights {
         if baseline.is_none() {
-            commands.entity(entity).insert(RaytracePunctualLight {
+            commands.entity(entity).insert(CapturedPunctualBaseline {
                 intensity: light.intensity,
             });
         }
@@ -292,7 +343,7 @@ fn sync_supported_light_baselines(
 
     for (entity, light, baseline) in &spot_lights {
         if baseline.is_none() {
-            commands.entity(entity).insert(RaytracePunctualLight {
+            commands.entity(entity).insert(CapturedPunctualBaseline {
                 intensity: light.intensity,
             });
         }
@@ -301,58 +352,100 @@ fn sync_supported_light_baselines(
 
 fn restore_supported_lights_for_clustering(
     settings: Res<RaytraceSettings>,
-    mut directional_lights: Query<(&mut DirectionalLight, &RaytraceDirectionalLight)>,
-    mut point_lights: Query<(&mut PointLight, &RaytracePunctualLight), Without<SpotLight>>,
-    mut spot_lights: Query<(&mut SpotLight, &RaytracePunctualLight), Without<PointLight>>,
+    mut directional_lights: Query<
+        (
+            &mut DirectionalLight,
+            &CapturedDirectionalBaseline,
+            Option<&RaytraceDirectionalLight>,
+        ),
+        Without<DisableRaytraceLight>,
+    >,
+    mut point_lights: Query<
+        (
+            &mut PointLight,
+            &CapturedPunctualBaseline,
+            Option<&RaytracePunctualLight>,
+        ),
+        (Without<SpotLight>, Without<DisableRaytraceLight>),
+    >,
+    mut spot_lights: Query<
+        (
+            &mut SpotLight,
+            &CapturedPunctualBaseline,
+            Option<&RaytracePunctualLight>,
+        ),
+        (Without<PointLight>, Without<DisableRaytraceLight>),
+    >,
 ) {
     if settings.mode != RaytraceMode::RaytracedShadows {
         return;
     }
 
-    for (mut light, override_light) in &mut directional_lights {
-        light.illuminance = override_light.illuminance;
+    for (mut light, baseline, override_light) in &mut directional_lights {
+        light.illuminance = override_light.map_or(baseline.illuminance, |value| value.illuminance);
     }
 
-    for (mut light, override_light) in &mut point_lights {
-        light.intensity = override_light.intensity;
+    for (mut light, baseline, override_light) in &mut point_lights {
+        light.intensity = override_light.map_or(baseline.intensity, |value| value.intensity);
     }
 
-    for (mut light, override_light) in &mut spot_lights {
-        light.intensity = override_light.intensity;
+    for (mut light, baseline, override_light) in &mut spot_lights {
+        light.intensity = override_light.map_or(baseline.intensity, |value| value.intensity);
     }
 }
 
 fn apply_supported_light_render_mode(
     settings: Res<RaytraceSettings>,
-    mut directional_lights: Query<(&mut DirectionalLight, &RaytraceDirectionalLight)>,
-    mut point_lights: Query<(&mut PointLight, &RaytracePunctualLight), Without<SpotLight>>,
-    mut spot_lights: Query<(&mut SpotLight, &RaytracePunctualLight), Without<PointLight>>,
+    mut directional_lights: Query<
+        (
+            &mut DirectionalLight,
+            &CapturedDirectionalBaseline,
+            Option<&RaytraceDirectionalLight>,
+        ),
+        Without<DisableRaytraceLight>,
+    >,
+    mut point_lights: Query<
+        (
+            &mut PointLight,
+            &CapturedPunctualBaseline,
+            Option<&RaytracePunctualLight>,
+        ),
+        (Without<SpotLight>, Without<DisableRaytraceLight>),
+    >,
+    mut spot_lights: Query<
+        (
+            &mut SpotLight,
+            &CapturedPunctualBaseline,
+            Option<&RaytracePunctualLight>,
+        ),
+        (Without<PointLight>, Without<DisableRaytraceLight>),
+    >,
 ) {
     let raytraced = settings.mode == RaytraceMode::RaytracedShadows;
 
-    for (mut light, override_light) in &mut directional_lights {
+    for (mut light, baseline, override_light) in &mut directional_lights {
         light.illuminance = if raytraced {
             0.0
         } else {
-            override_light.illuminance
+            override_light.map_or(baseline.illuminance, |value| value.illuminance)
         };
         light.shadows_enabled = !raytraced;
     }
 
-    for (mut light, override_light) in &mut point_lights {
+    for (mut light, baseline, override_light) in &mut point_lights {
         light.intensity = if raytraced {
             0.0
         } else {
-            override_light.intensity
+            override_light.map_or(baseline.intensity, |value| value.intensity)
         };
         light.shadows_enabled = !raytraced;
     }
 
-    for (mut light, override_light) in &mut spot_lights {
+    for (mut light, baseline, override_light) in &mut spot_lights {
         light.intensity = if raytraced {
             0.0
         } else {
-            override_light.intensity
+            override_light.map_or(baseline.intensity, |value| value.intensity)
         };
         light.shadows_enabled = !raytraced;
     }
@@ -365,47 +458,48 @@ fn sync_relevant_lights(
             Entity,
             Option<&RaytraceView>,
             Option<&VisibleClusterableObjects>,
-            &GlobalTransform,
         ),
         With<Camera3d>,
     >,
     directional_lights: Query<(
         &DirectionalLight,
         &GlobalTransform,
+        Option<&CapturedDirectionalBaseline>,
         Option<&RaytraceDirectionalLight>,
-    )>,
+    ), Without<DisableRaytraceLight>>,
     point_lights: Query<(
         &PointLight,
         &GlobalTransform,
+        Option<&CapturedPunctualBaseline>,
         Option<&RaytracePunctualLight>,
-    )>,
-    spot_lights: Query<(&SpotLight, &GlobalTransform, Option<&RaytracePunctualLight>)>,
+    ), (Without<SpotLight>, Without<DisableRaytraceLight>)>,
+    spot_lights: Query<
+        (
+            &SpotLight,
+            &GlobalTransform,
+            Option<&CapturedPunctualBaseline>,
+            Option<&RaytracePunctualLight>,
+        ),
+        (Without<PointLight>, Without<DisableRaytraceLight>),
+    >,
 ) {
-    for (entity, raytrace_view, visible_lights, camera_transform) in &managed_views {
+    for (entity, raytrace_view, visible_lights) in &managed_views {
         if raytrace_view.is_none() {
             commands.entity(entity).remove::<RaytraceLightSelection>();
             continue;
         }
 
-        let camera_position = camera_transform.translation();
         let mut selection = RaytraceLightSelection::default();
 
-        for (light, transform, override_light) in &directional_lights {
-            let illuminance = override_light.map_or(light.illuminance, |value| value.illuminance);
-            if illuminance <= 0.0 {
-                continue;
+        for (light, transform, captured, override_light) in &directional_lights {
+            let effective_override = override_light.copied().or_else(|| {
+                captured.map(|captured| RaytraceDirectionalLight {
+                    illuminance: captured.illuminance,
+                })
+            });
+            if let Some(light) = pack_directional_light(light, transform, effective_override.as_ref()) {
+                push_directional_light(&mut selection, light);
             }
-            if (selection.directional_light_count as usize) >= MAX_DIRECTIONAL_LIGHTS {
-                break;
-            }
-
-            let direction_to_light = -transform.forward().as_vec3();
-            selection.directional_lights[selection.directional_light_count as usize] =
-                GpuDirectionalLight {
-                    direction_to_light: direction_to_light.extend(0.0),
-                    color_illuminance: light.color.to_linear().to_vec3().extend(illuminance),
-                };
-            selection.directional_light_count += 1;
         }
 
         let mut scored = visible_lights
@@ -414,60 +508,25 @@ fn sync_relevant_lights(
                     .entities
                     .iter()
                     .filter_map(|light_entity| {
-                        if let Ok((light, transform, override_light)) =
+                        if let Ok((light, transform, captured, override_light)) =
                             point_lights.get(*light_entity)
                         {
-                            let intensity =
-                                override_light.map_or(light.intensity, |value| value.intensity);
-                            let distance_sq = camera_position
-                                .distance_squared(transform.translation())
-                                .max(1.0);
-                            let score = (intensity * light.range * light.range) / distance_sq;
-                            return Some((
-                                score,
-                                GpuPunctualLight {
-                                    position_range: transform.translation().extend(light.range),
-                                    color_intensity: light
-                                        .color
-                                        .to_linear()
-                                        .to_vec3()
-                                        .extend(intensity),
-                                    direction_cos_outer: Vec4::ZERO,
-                                    params: Vec4::ZERO,
-                                },
-                            ));
+                            let effective_override = override_light.copied().or_else(|| {
+                                captured.map(|captured| RaytracePunctualLight {
+                                    intensity: captured.intensity,
+                                })
+                            });
+                            return pack_point_light(light, transform, effective_override.as_ref());
                         }
 
-                        let (light, transform, override_light) =
+                        let (light, transform, captured, override_light) =
                             spot_lights.get(*light_entity).ok()?;
-                        let intensity =
-                            override_light.map_or(light.intensity, |value| value.intensity);
-                        let distance_sq = camera_position
-                            .distance_squared(transform.translation())
-                            .max(1.0);
-                        let score = (intensity * light.range * light.range) / distance_sq;
-                        let direction = transform.forward().as_vec3();
-                        let cos_inner = light.inner_angle.cos();
-                        let cos_outer = light.outer_angle.cos();
-                        let inverse_angle_range = 1.0 / (cos_inner - cos_outer).max(1e-4);
-                        Some((
-                            score,
-                            GpuPunctualLight {
-                                position_range: transform.translation().extend(light.range),
-                                color_intensity: light
-                                    .color
-                                    .to_linear()
-                                    .to_vec3()
-                                    .extend(intensity),
-                                direction_cos_outer: direction.extend(cos_outer),
-                                params: Vec4::new(
-                                    inverse_angle_range,
-                                    -cos_outer * inverse_angle_range,
-                                    1.0,
-                                    0.0,
-                                ),
-                            },
-                        ))
+                        let effective_override = override_light.copied().or_else(|| {
+                            captured.map(|captured| RaytracePunctualLight {
+                                intensity: captured.intensity,
+                            })
+                        });
+                        pack_spot_light(light, transform, effective_override.as_ref())
                     })
                     .collect::<Vec<_>>()
             })
@@ -476,10 +535,7 @@ fn sync_relevant_lights(
         scored.sort_by(|a, b| b.0.total_cmp(&a.0));
 
         for (_, light) in scored {
-            if (selection.punctual_light_count as usize) < MAX_PUNCTUAL_LIGHTS {
-                selection.punctual_lights[selection.punctual_light_count as usize] = light;
-                selection.punctual_light_count += 1;
-            }
+            push_punctual_light(&mut selection, light);
         }
 
         commands.entity(entity).insert(selection);
@@ -489,16 +545,31 @@ fn sync_relevant_lights(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::realtime::shared::{
+        TRACE_WGSL_MAX_DIRECTIONAL_LIGHTS, TRACE_WGSL_MAX_PUNCTUAL_LIGHTS,
+    };
 
     #[test]
-    fn settings_default_to_a_safe_runtime_toggle_off_state() {
+    fn settings_default_to_raytraced_mode() {
         let settings = RaytraceSettings::default();
         assert_eq!(settings.mode, RaytraceMode::RaytracedShadows);
         assert_eq!(settings.quality, RaytraceQuality::Balanced);
     }
 
     #[test]
+    fn mode_default_matches_settings_default() {
+        assert_eq!(RaytraceMode::default(), RaytraceMode::RaytracedShadows);
+    }
+
+    #[test]
     fn capabilities_default_to_disabled() {
         assert!(!RaytraceCapabilities::default().hardware_ray_query);
+    }
+
+    #[test]
+    fn trace_shader_light_limits_match_rust_constants() {
+        let shader = include_str!("trace.wgsl");
+        assert!(shader.contains(TRACE_WGSL_MAX_DIRECTIONAL_LIGHTS));
+        assert!(shader.contains(TRACE_WGSL_MAX_PUNCTUAL_LIGHTS));
     }
 }

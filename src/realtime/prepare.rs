@@ -1,4 +1,7 @@
-use super::{RaytraceLightSelection, RaytraceView};
+use super::{
+    RaytraceLightSelection, RaytraceView,
+    shared::{MAX_DIRECTIONAL_LIGHTS, MAX_PUNCTUAL_LIGHTS},
+};
 use bevy::{
     ecs::{
         component::Component,
@@ -18,9 +21,6 @@ use bevy::{
     },
 };
 use bevy::render::renderer::RenderQueue;
-
-pub const MAX_DIRECTIONAL_LIGHTS: usize = 4;
-pub const MAX_PUNCTUAL_LIGHTS: usize = 16;
 
 #[derive(Clone, Copy, Debug, ShaderType, Default)]
 pub struct GpuDirectionalLight {
