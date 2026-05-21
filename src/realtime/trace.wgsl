@@ -122,5 +122,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let shadow_mask = 1.0 - saturate(total_shadowed / total_unshadowed);
-    textureStore(output_texture, pixel, vec4(total_shadowed_light, shadow_mask));
+    textureStore(output_texture, pixel, vec4(total_shadowed_light * view.exposure, shadow_mask));
 }

@@ -7,13 +7,15 @@ use bevy::{
     camera::Camera3d,
     core_pipeline::prepass::{DeferredPrepass, DepthPrepass, NormalPrepass},
     ecs::{component::Component, prelude::ReflectComponent},
-    light::{cluster::VisibleClusterableObjects, DirectionalLight, PointLight, SimulationLightSystems, SpotLight},
+    light::{
+        DirectionalLight, PointLight, SimulationLightSystems, SpotLight,
+        cluster::VisibleClusterableObjects,
+    },
     pbr::DefaultOpaqueRendererMethod,
     prelude::*,
     reflect::{Reflect, std_traits::ReflectDefault},
     render::{
-        RenderApp,
-        Render, RenderSystems,
+        Render, RenderApp, RenderSystems,
         extract_component::{ExtractComponent, ExtractComponentPlugin},
         extract_resource::{ExtractResource, ExtractResourcePlugin},
         renderer::RenderDevice,
@@ -23,8 +25,7 @@ use bevy::{
 use node::{load_internal_assets, setup_render_app};
 use prepare::{
     GpuDirectionalLight, GpuPunctualLight, MAX_DIRECTIONAL_LIGHTS, MAX_PUNCTUAL_LIGHTS,
-    prepare_raytrace_output_textures,
-    prepare_raytrace_view_lights,
+    prepare_raytrace_output_textures, prepare_raytrace_view_lights,
 };
 
 /// Runtime settings used to enable or disable the raytraced path.
@@ -215,8 +216,7 @@ impl Plugin for RaytraceViewPlugin {
             let render_device = render_app.world().resource::<RenderDevice>();
             warn!(
                 "bevy_raytrace loaded on an adapter without hardware ray-query support. Managed raytraced views will stay disabled and Bevy rasterization will continue normally. Missing features: {:?}",
-                RaytracePlugins::required_wgpu_features()
-                    .difference(render_device.features())
+                RaytracePlugins::required_wgpu_features().difference(render_device.features())
             );
             return;
         }
@@ -227,7 +227,10 @@ impl Plugin for RaytraceViewPlugin {
         setup_render_app(render_app);
         render_app.add_systems(
             Render,
-            (prepare_raytrace_output_textures, prepare_raytrace_view_lights)
+            (
+                prepare_raytrace_output_textures,
+                prepare_raytrace_view_lights,
+            )
                 .in_set(RenderSystems::PrepareResources),
         );
     }
@@ -266,32 +269,59 @@ fn validate_raytrace_views(raytrace_views: Query<(Entity, &Msaa), With<RaytraceV
 }
 
 fn sync_supported_light_baselines(
+    settings: Res<RaytraceSettings>,
     mut commands: Commands,
     directional_lights: Query<(Entity, &DirectionalLight, Option<&RaytraceDirectionalLight>)>,
     point_lights: Query<(Entity, &PointLight, Option<&RaytracePunctualLight>), Without<SpotLight>>,
     spot_lights: Query<(Entity, &SpotLight, Option<&RaytracePunctualLight>), Without<PointLight>>,
 ) {
+    let capture_live_values = settings.mode == RaytraceMode::Bevy;
+
     for (entity, light, baseline) in &directional_lights {
-        if baseline.is_none() {
-            commands.entity(entity).insert(RaytraceDirectionalLight {
-                illuminance: light.illuminance,
-            });
+        match baseline {
+            Some(baseline) if capture_live_values && baseline.illuminance != light.illuminance => {
+                commands.entity(entity).insert(RaytraceDirectionalLight {
+                    illuminance: light.illuminance,
+                });
+            }
+            None => {
+                commands.entity(entity).insert(RaytraceDirectionalLight {
+                    illuminance: light.illuminance,
+                });
+            }
+            _ => {}
         }
     }
 
     for (entity, light, baseline) in &point_lights {
-        if baseline.is_none() {
-            commands.entity(entity).insert(RaytracePunctualLight {
-                intensity: light.intensity,
-            });
+        match baseline {
+            Some(baseline) if capture_live_values && baseline.intensity != light.intensity => {
+                commands.entity(entity).insert(RaytracePunctualLight {
+                    intensity: light.intensity,
+                });
+            }
+            None => {
+                commands.entity(entity).insert(RaytracePunctualLight {
+                    intensity: light.intensity,
+                });
+            }
+            _ => {}
         }
     }
 
     for (entity, light, baseline) in &spot_lights {
-        if baseline.is_none() {
-            commands.entity(entity).insert(RaytracePunctualLight {
-                intensity: light.intensity,
-            });
+        match baseline {
+            Some(baseline) if capture_live_values && baseline.intensity != light.intensity => {
+                commands.entity(entity).insert(RaytracePunctualLight {
+                    intensity: light.intensity,
+                });
+            }
+            None => {
+                commands.entity(entity).insert(RaytracePunctualLight {
+                    intensity: light.intensity,
+                });
+            }
+            _ => {}
         }
     }
 }
@@ -366,8 +396,16 @@ fn sync_relevant_lights(
         ),
         With<Camera3d>,
     >,
-    directional_lights: Query<(&DirectionalLight, &GlobalTransform, Option<&RaytraceDirectionalLight>)>,
-    point_lights: Query<(&PointLight, &GlobalTransform, Option<&RaytracePunctualLight>)>,
+    directional_lights: Query<(
+        &DirectionalLight,
+        &GlobalTransform,
+        Option<&RaytraceDirectionalLight>,
+    )>,
+    point_lights: Query<(
+        &PointLight,
+        &GlobalTransform,
+        Option<&RaytracePunctualLight>,
+    )>,
     spot_lights: Query<(&SpotLight, &GlobalTransform, Option<&RaytracePunctualLight>)>,
 ) {
     for (entity, raytrace_view, visible_lights, camera_transform) in &managed_views {
@@ -392,11 +430,7 @@ fn sync_relevant_lights(
             selection.directional_lights[selection.directional_light_count as usize] =
                 GpuDirectionalLight {
                     direction_to_light: direction_to_light.extend(0.0),
-                    color_illuminance: light
-                        .color
-                        .to_linear()
-                        .to_vec3()
-                        .extend(illuminance),
+                    color_illuminance: light.color.to_linear().to_vec3().extend(illuminance),
                 };
             selection.directional_light_count += 1;
         }
@@ -407,11 +441,14 @@ fn sync_relevant_lights(
                     .entities
                     .iter()
                     .filter_map(|light_entity| {
-                        if let Ok((light, transform, override_light)) = point_lights.get(*light_entity) {
+                        if let Ok((light, transform, override_light)) =
+                            point_lights.get(*light_entity)
+                        {
                             let intensity =
                                 override_light.map_or(light.intensity, |value| value.intensity);
-                            let distance_sq =
-                                camera_position.distance_squared(transform.translation()).max(1.0);
+                            let distance_sq = camera_position
+                                .distance_squared(transform.translation())
+                                .max(1.0);
                             let score = (intensity * light.range * light.range) / distance_sq;
                             return Some((
                                 score,
@@ -428,11 +465,13 @@ fn sync_relevant_lights(
                             ));
                         }
 
-                        let (light, transform, override_light) = spot_lights.get(*light_entity).ok()?;
+                        let (light, transform, override_light) =
+                            spot_lights.get(*light_entity).ok()?;
                         let intensity =
                             override_light.map_or(light.intensity, |value| value.intensity);
-                        let distance_sq =
-                            camera_position.distance_squared(transform.translation()).max(1.0);
+                        let distance_sq = camera_position
+                            .distance_squared(transform.translation())
+                            .max(1.0);
                         let score = (intensity * light.range * light.range) / distance_sq;
                         let direction = transform.forward().as_vec3();
                         let cos_inner = light.inner_angle.cos();
@@ -448,7 +487,12 @@ fn sync_relevant_lights(
                                     .to_vec3()
                                     .extend(intensity),
                                 direction_cos_outer: direction.extend(cos_outer),
-                                params: Vec4::new(inverse_angle_range, -cos_outer * inverse_angle_range, 1.0, 0.0),
+                                params: Vec4::new(
+                                    inverse_angle_range,
+                                    -cos_outer * inverse_angle_range,
+                                    1.0,
+                                    0.0,
+                                ),
                             },
                         ))
                     })
