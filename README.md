@@ -17,7 +17,8 @@ Usage note:
 - `RaytraceDirectionalLight` / `RaytracePunctualLight` are optional overrides
   that pin the baseline light intensity used by the raytraced path
 - `RaytraceSettings` can still be inserted if you want to toggle back to Bevy
-  shadows at runtime
+  shadows at runtime; otherwise the plugin defaults to raytraced shadows on
+  supported hardware
 
 Non-goals right now:
 - temporal denoising or temporal accumulation

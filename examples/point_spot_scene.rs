@@ -6,8 +6,8 @@ use bevy_raytrace::prelude::*;
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum ShadowRenderMode {
     #[default]
-    Bevy,
     Raytraced,
+    Bevy,
 }
 
 fn main() {
@@ -26,10 +26,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    commands.insert_resource(RaytraceSettings {
-        mode: RaytraceMode::Bevy,
-        ..default()
-    });
+    commands.insert_resource(RaytraceSettings::default());
     commands.insert_resource(PointLightShadowMap { size: 64 });
     commands.insert_resource(GlobalAmbientLight {
         brightness: 10.0,

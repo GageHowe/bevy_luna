@@ -43,7 +43,7 @@ pub struct RaytraceSettings {
 impl Default for RaytraceSettings {
     fn default() -> Self {
         Self {
-            mode: RaytraceMode::Bevy,
+            mode: RaytraceMode::RaytracedShadows,
             quality: RaytraceQuality::Balanced,
             debug: RaytraceDebugMode::None,
         }
@@ -493,7 +493,7 @@ mod tests {
     #[test]
     fn settings_default_to_a_safe_runtime_toggle_off_state() {
         let settings = RaytraceSettings::default();
-        assert_eq!(settings.mode, RaytraceMode::Bevy);
+        assert_eq!(settings.mode, RaytraceMode::RaytracedShadows);
         assert_eq!(settings.quality, RaytraceQuality::Balanced);
     }
 
