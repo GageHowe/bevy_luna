@@ -1,4 +1,7 @@
 //! Experimental real-time raytraced shadow replacement for Bevy without temporal history.
+//!
+//! Add [`RaytracePlugins`] to enable the raytraced path on supported hardware.
+//! Omit the plugin to keep plain Bevy rendering.
 
 mod realtime;
 mod scene;

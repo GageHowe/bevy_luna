@@ -27,7 +27,10 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    commands.insert_resource(RaytraceSettings::default());
+    commands.insert_resource(RaytraceSettings {
+        mode: RaytraceMode::Bevy,
+        ..default()
+    });
     commands.insert_resource(GlobalAmbientLight {
         brightness: 16.0,
         ..default()

@@ -42,7 +42,7 @@ pub struct RaytraceSettings {
 impl Default for RaytraceSettings {
     fn default() -> Self {
         Self {
-            mode: RaytraceMode::Bevy,
+            mode: RaytraceMode::RaytracedShadows,
             quality: RaytraceQuality::Balanced,
             debug: RaytraceDebugMode::None,
         }
@@ -83,7 +83,10 @@ pub enum RaytraceDebugMode {
     DirectLighting,
 }
 
-/// Marker for cameras whose `RaytraceView` should be managed by `RaytraceSettings`.
+/// Optional marker for cameras whose `RaytraceView` should be managed by `RaytraceSettings`.
+///
+/// The plugin currently auto-manages all `Camera3d` views. This marker remains
+/// as a stable opt-in API surface and for explicitness in examples.
 #[derive(Component, Clone, Copy, Debug, Default, Reflect, PartialEq, Eq)]
 #[reflect(Component, Default, PartialEq)]
 #[require(Camera3d)]
@@ -91,8 +94,9 @@ pub struct RaytraceManagedView;
 
 /// Explicit directional light data for the raytraced path.
 ///
-/// Attach this when you want the raytracer to preserve a directional light's
-/// source intensity even if the runtime mode temporarily zeros the Bevy light.
+/// Attach this to lights that should switch between Bevy shadow maps and the
+/// raytraced shadow path at runtime. In `RaytracedShadows` mode the plugin
+/// temporarily zeros the Bevy light and re-lights it in the compute pass.
 #[derive(Component, Clone, Copy, Debug, Default, Reflect, PartialEq)]
 #[reflect(Component, Default, PartialEq)]
 pub struct RaytraceDirectionalLight {
@@ -102,8 +106,9 @@ pub struct RaytraceDirectionalLight {
 
 /// Explicit point/spot light data for the raytraced path.
 ///
-/// Attach this when you want the raytracer to preserve a punctual light's
-/// source intensity even if the runtime mode temporarily zeros the Bevy light.
+/// Attach this to lights that should switch between Bevy shadow maps and the
+/// raytraced shadow path at runtime. In `RaytracedShadows` mode the plugin
+/// temporarily zeros the Bevy light and re-lights it in the compute pass.
 #[derive(Component, Clone, Copy, Debug, Default, Reflect, PartialEq)]
 #[reflect(Component, Default, PartialEq)]
 pub struct RaytracePunctualLight {
@@ -174,6 +179,9 @@ impl Plugin for RaytraceViewPlugin {
                 PostUpdate,
                 (
                     sync_managed_views,
+                    sync_supported_light_baselines
+                        .after(sync_managed_views)
+                        .before(restore_supported_lights_for_clustering),
                     restore_supported_lights_for_clustering
                         .after(sync_managed_views)
                         .before(SimulationLightSystems::AssignLightsToClusters),
@@ -229,7 +237,7 @@ fn sync_managed_views(
     mut commands: Commands,
     capabilities: Res<RaytraceCapabilities>,
     settings: Res<RaytraceSettings>,
-    mut managed_views: Query<(Entity, Option<&mut RaytraceView>), With<RaytraceManagedView>>,
+    mut managed_views: Query<(Entity, Option<&mut RaytraceView>), With<Camera3d>>,
 ) {
     for (entity, view) in &mut managed_views {
         if settings.mode == RaytraceMode::RaytracedShadows && capabilities.hardware_ray_query {
@@ -253,6 +261,37 @@ fn validate_raytrace_views(raytrace_views: Query<(Entity, &Msaa), With<RaytraceV
     for (entity, msaa) in &raytrace_views {
         if *msaa != Msaa::Off {
             warn!("RaytraceView on entity {entity} requires Msaa::Off");
+        }
+    }
+}
+
+fn sync_supported_light_baselines(
+    mut commands: Commands,
+    directional_lights: Query<(Entity, &DirectionalLight, Option<&RaytraceDirectionalLight>)>,
+    point_lights: Query<(Entity, &PointLight, Option<&RaytracePunctualLight>), Without<SpotLight>>,
+    spot_lights: Query<(Entity, &SpotLight, Option<&RaytracePunctualLight>), Without<PointLight>>,
+) {
+    for (entity, light, baseline) in &directional_lights {
+        if baseline.is_none() {
+            commands.entity(entity).insert(RaytraceDirectionalLight {
+                illuminance: light.illuminance,
+            });
+        }
+    }
+
+    for (entity, light, baseline) in &point_lights {
+        if baseline.is_none() {
+            commands.entity(entity).insert(RaytracePunctualLight {
+                intensity: light.intensity,
+            });
+        }
+    }
+
+    for (entity, light, baseline) in &spot_lights {
+        if baseline.is_none() {
+            commands.entity(entity).insert(RaytracePunctualLight {
+                intensity: light.intensity,
+            });
         }
     }
 }
@@ -325,7 +364,7 @@ fn sync_relevant_lights(
             Option<&VisibleClusterableObjects>,
             &GlobalTransform,
         ),
-        With<RaytraceManagedView>,
+        With<Camera3d>,
     >,
     directional_lights: Query<(&DirectionalLight, &GlobalTransform, Option<&RaytraceDirectionalLight>)>,
     point_lights: Query<(&PointLight, &GlobalTransform, Option<&RaytracePunctualLight>)>,
@@ -437,7 +476,7 @@ mod tests {
     #[test]
     fn settings_default_to_a_safe_runtime_toggle_off_state() {
         let settings = RaytraceSettings::default();
-        assert_eq!(settings.mode, RaytraceMode::Bevy);
+        assert_eq!(settings.mode, RaytraceMode::RaytracedShadows);
         assert_eq!(settings.quality, RaytraceQuality::Balanced);
     }
 
